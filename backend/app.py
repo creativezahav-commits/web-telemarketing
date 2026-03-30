@@ -31,11 +31,10 @@ def run(coro):
 def get_semua_akun():
     return jsonify(cek_status_semua())
 
-@app.route("/api/akun/login", methods=["POST"])
-def post_login_akun():
-    phone = request.json.get("phone")
-    if not phone: return jsonify({"error": "Nomor HP wajib"}), 400
-    return jsonify(run(login_akun(phone)))
+@app.route("/api/akun/otp", methods=["POST"])
+def api_submit_otp():
+    b = request.json
+    return jsonify(run(submit_otp(b.get("phone"), b.get("kode"), b.get("password"))))
 
 @app.route("/api/akun/logout", methods=["POST"])
 def post_logout_akun():
