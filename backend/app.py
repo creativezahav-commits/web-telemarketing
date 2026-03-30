@@ -1,6 +1,5 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import asyncio
 import os
 
 from utils.database import init_db
@@ -14,7 +13,10 @@ from utils.storage_db import (
     get_riwayat_hari_ini, get_ringkasan_hari_ini,
     sudah_dikirim_hari_ini
 )
-from services.account_manager import login_akun, logout_akun, submit_otp, _clients
+from services.account_manager import (
+    login_akun, logout_akun, submit_otp,
+    _clients, run_sync
+)
 from services.group_manager import fetch_grup_dari_akun
 from services.message_service import kirim_pesan_manual
 from core.smart_sender import pilih_akun_tersedia, ringkasan_akun
@@ -23,14 +25,6 @@ app = Flask(__name__)
 CORS(app)
 
 init_db()
-
-def run(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 # ── SERVE FRONTEND ────────────────────────────────────────
@@ -58,16 +52,18 @@ def api_login():
     phone = request.json.get("phone")
     if not phone:
         return jsonify({"error": "Nomor HP wajib"}), 400
-    return jsonify(run(login_akun(phone)))
+    return jsonify(run_sync(login_akun(phone)))
 
 @app.route("/api/akun/otp", methods=["POST"])
 def api_submit_otp():
     b = request.json
-    return jsonify(run(submit_otp(b.get("phone"), b.get("kode"), b.get("password"))))
+    return jsonify(run_sync(submit_otp(
+        b.get("phone"), b.get("kode"), b.get("password")
+    )))
 
 @app.route("/api/akun/logout", methods=["POST"])
 def api_logout():
-    return jsonify(run(logout_akun(request.json.get("phone"))))
+    return jsonify(run_sync(logout_akun(request.json.get("phone"))))
 
 @app.route("/api/akun/status", methods=["POST"])
 def api_status_akun():
@@ -104,7 +100,7 @@ def api_fetch_grup():
     phone = request.json.get("phone")
     if not phone:
         return jsonify({"error": "Pilih akun"}), 400
-    hasil = run(fetch_grup_dari_akun(phone))
+    hasil = run_sync(fetch_grup_dari_akun(phone))
     simpan_banyak_grup(hasil)
     return jsonify(hasil)
 
@@ -124,12 +120,10 @@ def api_pulihkan_grup():
 @app.route("/api/pesan/kirim", methods=["POST"])
 def api_kirim():
     b = request.json
-    phone   = b.get("phone")
-    grup_id = b.get("grup_id")
-    pesan   = b.get("pesan")
+    phone, grup_id, pesan = b.get("phone"), b.get("grup_id"), b.get("pesan")
     if not all([phone, grup_id, pesan]):
         return jsonify({"error": "phone, grup_id, pesan wajib"}), 400
-    return jsonify(run(kirim_pesan_manual(phone, grup_id, pesan)))
+    return jsonify(run_sync(kirim_pesan_manual(phone, grup_id, pesan)))
 
 @app.route("/api/pesan/log", methods=["GET"])
 def api_log():
@@ -170,7 +164,7 @@ def api_kirim_antrian(iid):
     item    = next((a for a in antrian if a["id"] == iid), None)
     if not item:
         return jsonify({"error": "Item tidak ditemukan"}), 404
-    hasil  = run(kirim_pesan_manual(item["phone"], item["grup_id"], item["pesan"]))
+    hasil  = run_sync(kirim_pesan_manual(item["phone"], item["grup_id"], item["pesan"]))
     status = "terkirim" if hasil["status"] == "berhasil" else "gagal"
     update_status_antrian(iid, status)
     return jsonify(hasil)
@@ -196,4 +190,4 @@ def api_cek_kirim(gid):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    app.run(debug=False, host="127.0.0.1", port=5000)
