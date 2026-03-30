@@ -69,7 +69,7 @@ function updateJumlahDipilih() {
 }
 
 // ── MULAI BROADCAST ───────────────────────────────────────
-async function mulaibroadcasting() {
+async function mulaiBroadcast() {
     const phone = document.getElementById("broadcast-akun").value;
     const pesan = document.getElementById("broadcast-pesan").value.trim();
     const jeda  = parseInt(document.getElementById("broadcast-jeda").value) || 30;
