@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Telegram HR Dashboard v2</title>
+  <title>Telegram HR Dashboard</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,11 +13,12 @@
   <nav>
     <a id="menu-akun"    onclick="tampilTab('akun')"   >👤 Akun</a>
     <a id="menu-grup"    onclick="tampilTab('grup')"   >👥 Grup</a>
-    <a id="menu-draft"   onclick="tampilTab('draft')"  >📝 Draft Pesan</a>
+    <a id="menu-draft"   onclick="tampilTab('draft')"  >📝 Draft</a>
     <a id="menu-antrian" onclick="tampilTab('antrian')">📋 Antrian</a>
     <a id="menu-kirim"   onclick="tampilTab('kirim')"  >✉️ Kirim</a>
     <a id="menu-riwayat" onclick="tampilTab('riwayat')">📊 Riwayat</a>
   </nav>
+  <div class="sidebar-footer" id="sidebar-summary"></div>
 </div>
 
 <div class="konten">
@@ -25,16 +26,51 @@
   <!-- ── TAB: AKUN ── -->
   <div id="tab-akun" class="tab">
     <h2>👤 Daftar Akun</h2>
-    <div id="list-akun"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+
+    <div id="ringkasan-akun-grid" class="akun-grid" style="margin-bottom:20px"></div>
+
+    <div id="list-akun">
+      <div class="loading"><span class="spinner"></span> Memuat...</div>
+    </div>
     <hr>
-    <div class="section-card">
+
+    <!-- Form Login -->
+    <div class="section-card" id="form-login">
       <h3>➕ Tambah Akun</h3>
       <div class="form-group">
-        <label>Nomor HP</label>
+        <label>Nomor HP (format internasional)</label>
         <input id="input-phone" placeholder="+628123456789" type="tel">
       </div>
       <button class="btn-primary" onclick="loginAkun()">🔗 Login</button>
       <div id="pesan-akun" class="pesan-status"></div>
+    </div>
+
+    <!-- Form OTP — muncul setelah klik Login -->
+    <div class="section-card" id="form-otp" style="display:none">
+      <h3>📱 Masukkan Kode OTP</h3>
+      <p style="font-size:13px;color:#555;margin-bottom:14px">
+        Kode OTP sudah dikirim ke aplikasi Telegram kamu.
+        Buka Telegram → cari pesan dari <strong>Telegram</strong>.
+      </p>
+      <div class="form-group">
+        <label>Nomor HP</label>
+        <input id="otp-phone" readonly style="background:#f8fafc;color:#888">
+      </div>
+      <div class="form-group">
+        <label>Kode OTP (5 digit)</label>
+        <input id="input-otp" placeholder="12345" maxlength="5"
+               type="text" inputmode="numeric"
+               style="font-size:24px;letter-spacing:8px;max-width:200px">
+      </div>
+      <div class="form-group" id="form-2fa" style="display:none">
+        <label>Password 2FA (kalau diminta)</label>
+        <input id="input-2fa" placeholder="Password Telegram" type="password">
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn-success" onclick="submitOtp()">✅ Verifikasi OTP</button>
+        <button class="btn-outline" onclick="batalOtp()">❌ Batal</button>
+      </div>
+      <div id="pesan-otp" class="pesan-status"></div>
     </div>
   </div>
 
@@ -61,7 +97,7 @@
     <div class="section-card">
       <h3>➕ Buat Draft Baru</h3>
       <div class="form-group">
-        <label>Judul Draft</label>
+        <label>Judul</label>
         <input id="draft-judul" placeholder="Misal: Lowongan Staff April">
       </div>
       <div class="form-group">
@@ -73,7 +109,7 @@
     </div>
     <h3 style="margin-bottom:12px">📂 Draft Tersimpan</h3>
     <div id="list-draft">
-      <div class="loading"><span class="spinner"></span> Memuat draft...</div>
+      <div class="loading"><span class="spinner"></span> Memuat...</div>
     </div>
   </div>
 
@@ -92,29 +128,33 @@
       </div>
       <div class="form-group">
         <label>Isi pesan</label>
-        <textarea id="antrian-pesan" placeholder="Tulis pesan atau salin dari draft..."></textarea>
+        <textarea id="antrian-pesan" placeholder="Tulis atau salin dari draft..."></textarea>
       </div>
       <button class="btn-primary" onclick="tambahAntrian()">➕ Masukkan Antrian</button>
       <div id="pesan-antrian" class="pesan-status"></div>
     </div>
-    <h3 style="margin-bottom:12px">⏳ Menunggu Dikirim</h3>
+    <h3 style="margin-bottom:12px">⏳ Daftar Antrian</h3>
     <div id="list-antrian">
-      <div class="loading"><span class="spinner"></span> Memuat antrian...</div>
+      <div class="loading"><span class="spinner"></span> Memuat...</div>
     </div>
   </div>
 
-  <!-- ── TAB: KIRIM LANGSUNG ── -->
+  <!-- ── TAB: KIRIM ── -->
   <div id="tab-kirim" class="tab" style="display:none">
     <h2>✉️ Kirim Langsung</h2>
+    <div id="indikator-akun" style="margin-bottom:16px"></div>
     <div class="section-card">
       <h3>📤 Form Kirim Manual</h3>
       <div class="form-group">
         <label>Akun pengirim</label>
         <select id="pilih-akun-kirim"></select>
+        <div id="info-limit-akun" style="margin-top:8px"></div>
       </div>
       <div class="form-group">
-        <label>Grup tujuan</label>
-        <select id="pilih-grup-kirim"></select>
+        <label>Grup tujuan
+          <span id="status-grup-tujuan" class="hint"></span>
+        </label>
+        <select id="pilih-grup-kirim" onchange="cekStatusGrup()"></select>
       </div>
       <div class="form-group">
         <label>Isi pesan</label>
@@ -133,7 +173,7 @@
       <button class="btn-outline" onclick="muatRiwayat()">🔄 Refresh</button>
     </div>
     <div id="list-riwayat">
-      <div class="empty-state"><div class="icon">📊</div><p>Klik Refresh untuk muat riwayat</p></div>
+      <div class="empty-state"><div class="icon">📊</div><p>Klik Refresh</p></div>
     </div>
   </div>
 
