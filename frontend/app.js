@@ -7,7 +7,7 @@ function tampilTab(nama) {
   const m = document.getElementById(`menu-${nama}`);
   if (m) m.classList.add("aktif-menu");
   const fn = { akun:"muatAkun", grup:"muatTabGrup", draft:"muatDraft",
-               antrian:"muatAntrian", kirim:"muatTabKirim", riwayat:"muatRiwayat" };
+               antrian:"muatAntrian", kirim:"muatTabKirim", broadcast:"muatTabBroadcast", riwayat:"muatRiwayat" };
   if (fn[nama]) window[fn[nama]]();
 }
 

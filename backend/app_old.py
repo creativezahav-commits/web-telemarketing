@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+import asyncio
 import os
-import threading
 
 from utils.database import init_db
 from utils.storage_db import (
@@ -14,22 +14,23 @@ from utils.storage_db import (
     get_riwayat_hari_ini, get_ringkasan_hari_ini,
     sudah_dikirim_hari_ini
 )
-from services.account_manager import (
-    login_akun, logout_akun, submit_otp,
-    _clients, run_sync, _loop
-)
+from services.account_manager import login_akun, logout_akun, submit_otp, _clients
 from services.group_manager import fetch_grup_dari_akun
 from services.message_service import kirim_pesan_manual
 from core.smart_sender import pilih_akun_tersedia, ringkasan_akun
-from core.broadcast_session import (
-    buat_sesi, get_sesi, get_semua_sesi,
-    stop_sesi, hapus_sesi, jalankan_sesi
-)
-import asyncio
 
 app = Flask(__name__)
 CORS(app)
+
 init_db()
+
+def run(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ── SERVE FRONTEND ────────────────────────────────────────
@@ -57,18 +58,16 @@ def api_login():
     phone = request.json.get("phone")
     if not phone:
         return jsonify({"error": "Nomor HP wajib"}), 400
-    return jsonify(run_sync(login_akun(phone)))
+    return jsonify(run(login_akun(phone)))
 
 @app.route("/api/akun/otp", methods=["POST"])
 def api_submit_otp():
     b = request.json
-    return jsonify(run_sync(submit_otp(
-        b.get("phone"), b.get("kode"), b.get("password")
-    )))
+    return jsonify(run(submit_otp(b.get("phone"), b.get("kode"), b.get("password"))))
 
 @app.route("/api/akun/logout", methods=["POST"])
 def api_logout():
-    return jsonify(run_sync(logout_akun(request.json.get("phone"))))
+    return jsonify(run(logout_akun(request.json.get("phone"))))
 
 @app.route("/api/akun/status", methods=["POST"])
 def api_status_akun():
@@ -105,7 +104,7 @@ def api_fetch_grup():
     phone = request.json.get("phone")
     if not phone:
         return jsonify({"error": "Pilih akun"}), 400
-    hasil = run_sync(fetch_grup_dari_akun(phone))
+    hasil = run(fetch_grup_dari_akun(phone))
     simpan_banyak_grup(hasil)
     return jsonify(hasil)
 
@@ -121,14 +120,16 @@ def api_pulihkan_grup():
     return jsonify({"ok": True})
 
 
-# ── KIRIM LANGSUNG ────────────────────────────────────────
+# ── KIRIM ─────────────────────────────────────────────────
 @app.route("/api/pesan/kirim", methods=["POST"])
 def api_kirim():
     b = request.json
-    phone, grup_id, pesan = b.get("phone"), b.get("grup_id"), b.get("pesan")
+    phone   = b.get("phone")
+    grup_id = b.get("grup_id")
+    pesan   = b.get("pesan")
     if not all([phone, grup_id, pesan]):
         return jsonify({"error": "phone, grup_id, pesan wajib"}), 400
-    return jsonify(run_sync(kirim_pesan_manual(phone, grup_id, pesan)))
+    return jsonify(run(kirim_pesan_manual(phone, grup_id, pesan)))
 
 @app.route("/api/pesan/log", methods=["GET"])
 def api_log():
@@ -169,7 +170,7 @@ def api_kirim_antrian(iid):
     item    = next((a for a in antrian if a["id"] == iid), None)
     if not item:
         return jsonify({"error": "Item tidak ditemukan"}), 404
-    hasil  = run_sync(kirim_pesan_manual(item["phone"], item["grup_id"], item["pesan"]))
+    hasil  = run(kirim_pesan_manual(item["phone"], item["grup_id"], item["pesan"]))
     status = "terkirim" if hasil["status"] == "berhasil" else "gagal"
     update_status_antrian(iid, status)
     return jsonify(hasil)
@@ -194,88 +195,5 @@ def api_cek_kirim(gid):
     return jsonify({"sudah_dikirim": sudah_dikirim_hari_ini(gid)})
 
 
-# ── BROADCAST ─────────────────────────────────────────────
-def _jalankan_broadcast(session_id, client):
-    asyncio.run_coroutine_threadsafe(
-        jalankan_sesi(session_id, client), _loop
-    )
-
-@app.route("/api/broadcast/mulai", methods=["POST"])
-def api_broadcast_mulai():
-    b         = request.json
-    phone     = b.get("phone")
-    pesan     = b.get("pesan")
-    jeda      = int(b.get("jeda", 30))
-    grup_list = b.get("grup_list", [])
-
-    if not phone:
-        return jsonify({"error": "Pilih akun pengirim"}), 400
-    if not pesan:
-        return jsonify({"error": "Isi pesan wajib"}), 400
-    if not grup_list:
-        return jsonify({"error": "Pilih minimal 1 grup"}), 400
-    if len(grup_list) > 30:
-        return jsonify({"error": "Maksimal 30 grup per sesi"}), 400
-    if jeda < 10:
-        return jsonify({"error": "Jeda minimal 10 detik"}), 400
-
-    client = _clients.get(phone)
-    if not client:
-        return jsonify({"error": "Akun tidak aktif. Login dulu."}), 400
-
-    session_id = buat_sesi(phone, grup_list, pesan, jeda)
-    t = threading.Thread(
-        target=_jalankan_broadcast,
-        args=(session_id, client),
-        daemon=True
-    )
-    t.start()
-
-    return jsonify({
-        "ok"        : True,
-        "session_id": session_id,
-        "pesan"     : f"Sesi dimulai. Akan kirim ke {len(grup_list)} grup."
-    })
-
-@app.route("/api/broadcast/status/<session_id>", methods=["GET"])
-def api_broadcast_status(session_id):
-    sesi = get_sesi(session_id)
-    if not sesi:
-        return jsonify({"error": "Sesi tidak ditemukan"}), 404
-    return jsonify({
-        "session_id" : sesi["session_id"],
-        "phone"      : sesi["phone"],
-        "status"     : sesi["status"],
-        "total"      : sesi["total"],
-        "selesai"    : sesi["selesai"],
-        "countdown"  : sesi.get("countdown", 0),
-        "hasil"      : sesi["hasil"],
-        "mulai"      : sesi["mulai"],
-        "selesai_pada": sesi.get("selesai_pada")
-    })
-
-@app.route("/api/broadcast/stop/<session_id>", methods=["POST"])
-def api_broadcast_stop(session_id):
-    stop_sesi(session_id)
-    return jsonify({"ok": True})
-
-@app.route("/api/broadcast/semua", methods=["GET"])
-def api_broadcast_semua():
-    semua = get_semua_sesi()
-    return jsonify([{
-        "session_id": s["session_id"],
-        "phone"     : s["phone"],
-        "status"    : s["status"],
-        "total"     : s["total"],
-        "selesai"   : s["selesai"],
-        "mulai"     : s["mulai"]
-    } for s in semua])
-
-@app.route("/api/broadcast/hapus/<session_id>", methods=["DELETE"])
-def api_broadcast_hapus(session_id):
-    hapus_sesi(session_id)
-    return jsonify({"ok": True})
-
-
 if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=5000)
+    app.run(debug=True, host="127.0.0.1", port=5000)

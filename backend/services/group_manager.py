@@ -1,6 +1,6 @@
 from telethon.tl.types import Channel, Chat
 from services.account_manager import get_client
-from utils.storage import baca_json, tulis_json
+from utils.storage_db import simpan_banyak_grup
 
 async def fetch_grup_dari_akun(phone: str) -> list:
     client = get_client(phone)
@@ -12,17 +12,15 @@ async def fetch_grup_dari_akun(phone: str) -> list:
         if isinstance(e, (Channel, Chat)):
             username = getattr(e, "username", None)
             semua.append({
-                "id": e.id, "nama": e.title, "username": username,
-                "tipe": _tipe(e),
+                "id"           : e.id,
+                "nama"         : e.title,
+                "username"     : username,
+                "tipe"         : _tipe(e),
                 "jumlah_member": getattr(e, "participants_count", None),
-                "link": f"https://t.me/{username}" if username else None,
-                "status": "active"
+                "link"         : f"https://t.me/{username}" if username else None,
+                "status"       : "active"
             })
-    tulis_json("data/grup.json", semua)
     return semua
-
-def baca_grup_tersimpan() -> list:
-    return baca_json("data/grup.json")
 
 def _tipe(e) -> str:
     if isinstance(e, Channel):
