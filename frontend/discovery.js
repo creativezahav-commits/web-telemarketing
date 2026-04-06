@@ -12,7 +12,9 @@ async function fetchGrupBaru() {
         const data = await _post("/grup/fetch/baru", { phone });
         tampilPesan("pesan-discovery",`✅ Ditemukan ${data.length} grup baru.`,"berhasil");
         tampilHasilDiscovery(data);
-    } catch { tampilPesan("pesan-discovery","❌ Gagal fetch.","gagal"); }
+    } catch {
+        tampilPesan("pesan-discovery","❌ Gagal fetch.","gagal");
+    }
 }
 
 async function tambahGrupManual() {
@@ -29,7 +31,9 @@ async function tambahGrupManual() {
         } else {
             tampilPesan("pesan-discovery-manual",`❌ ${r.error}`,"gagal");
         }
-    } catch { tampilPesan("pesan-discovery-manual","❌ Gagal.","gagal"); }
+    } catch {
+        tampilPesan("pesan-discovery-manual","❌ Gagal.","gagal");
+    }
 }
 
 function tampilHasilDiscovery(data) {
@@ -49,19 +53,28 @@ function tampilHasilDiscovery(data) {
                     <small>${g.tipe} · ${g.jumlah_member ? g.jumlah_member.toLocaleString()+' member' : '?'}</small>
                     ${g.link ? `<small><a href="${g.link}" target="_blank" style="color:#2563eb">${g.link}</a></small>` : ''}
                 </div>
-                <button class="btn-success btn-sm" onclick="tambahKeDB(${JSON.stringify(g).replace(/"/g,'&quot;')})">
+                <button class="btn-success btn-sm" onclick="tambahKeDB(decodeURIComponent('${encodeURIComponent(JSON.stringify(g))}'))">
                     ➕ Tambah ke Sistem
                 </button>
             </div>`).join("");
 }
 
-async function tambahKeDB(grup) {
-    await _post("/grup/fetch", { phone: document.getElementById("discovery-akun").value });
-    // Tandai sudah ditambah
-    const el = document.getElementById(`discovery-item-${grup.id}`);
-    if (el) {
-        el.style.opacity = "0.5";
-        el.querySelector("button").textContent = "✅ Ditambahkan";
-        el.querySelector("button").disabled = true;
+async function tambahKeDB(rawGrup) {
+    const grup = typeof rawGrup === 'string' ? JSON.parse(rawGrup) : rawGrup;
+    try {
+        const r = await _post("/grup/tambah", { ...grup, sumber: "discovery" });
+        if (!r.ok) throw new Error(r.error || "Gagal menyimpan grup");
+
+        const el = document.getElementById(`discovery-item-${grup.id}`);
+        if (el) {
+            el.style.opacity = "0.5";
+            const btn = el.querySelector("button");
+            if (btn) {
+                btn.textContent = "✅ Ditambahkan";
+                btn.disabled = true;
+            }
+        }
+    } catch (err) {
+        alert(err.message || "Gagal menambahkan grup");
     }
 }

@@ -1,0 +1,95 @@
+# patch_automation.ps1
+# Jalankan di PowerShell:
+#   cd C:\Users\user\Downloads\telegrammm\web-telemarketing\frontend
+#   .\patch_automation.ps1
+
+$file = "C:\Users\user\Downloads\telegrammm\web-telemarketing\frontend\automation.js"
+
+# Backup dulu
+Copy-Item $file "$file.bak"
+Write-Host "Backup dibuat: $file.bak"
+
+$content = Get-Content $file -Raw -Encoding UTF8
+
+# Cari posisi fungsi lama
+$startMarker = "async function _renderThrottlePanel() {"
+$startIdx = $content.IndexOf($startMarker)
+
+if ($startIdx -lt 0) {
+    Write-Host "GAGAL: Fungsi _renderThrottlePanel tidak ditemukan!"
+    exit 1
+}
+
+# Cari penutup fungsi (cari "}" yang menutup fungsi ini)
+# Hitung kedalaman kurung kurawal
+$depth = 0
+$endIdx = $startIdx
+$found = $false
+for ($i = $startIdx; $i -lt $content.Length; $i++) {
+    if ($content[$i] -eq '{') { $depth++ }
+    elseif ($content[$i] -eq '}') {
+        $depth--
+        if ($depth -eq 0) {
+            $endIdx = $i
+            $found = $true
+            break
+        }
+    }
+}
+
+if (-not $found) {
+    Write-Host "GAGAL: Tidak bisa menemukan penutup fungsi!"
+    exit 1
+}
+
+$oldFunc = $content.Substring($startIdx, $endIdx - $startIdx + 1)
+Write-Host "Fungsi lama ditemukan ($($oldFunc.Length) karakter)"
+
+$newFunc = @'
+async function _renderThrottlePanel() {
+    let panel = document.getElementById('automation-throttle-panel');
+    if (!panel) return;
+    try {
+        const [akun, throttle] = await Promise.all([
+            fetch('/api/akun').then(r => r.json()),
+            fetch('/api/v2/broadcast-queue/throttle-status').then(r => r.json()),
+        ]);
+        const now = new Date();
+        const fs = (d) => { if(!d) return null; const dt=new Date(d.replace(' ','T')),ms=dt-now; if(ms<=0) return 'sekarang'; const m=Math.floor(ms/60000),j=Math.floor(m/60); return j>0?j+'j '+(m%60)+'m lagi':m+'m lagi'; };
+        const fw = (d) => { try{return new Date(d.replace(' ','T')).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});}catch{return '-';} };
+        function cellJadwal(a) {
+            const parts=[],now2=new Date();
+            const lastB=a.last_broadcast_at,nextB=a.next_broadcast_at,grupB=a.last_broadcast_group;
+            const nextBOk=!nextB||new Date(nextB.replace(' ','T'))<=now2;
+            if(lastB) parts.push('<div style="margin-bottom:3px"><span style="font-size:10px;background:#eff6ff;color:#2563eb;padding:1px 5px;border-radius:4px;font-weight:600">📤 Kirim</span> terakhir <strong>'+fw(lastB)+'</strong>'+(grupB?' <span style="color:#64748b;font-size:10px">→ '+grupB+'</span>':'')+'</div>');
+            if(nextB&&!nextBOk) parts.push('<div style="margin-bottom:3px"><span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:4px;font-weight:600">⏳ Next kirim</span> <strong>'+fw(nextB)+'</strong> <em style="color:#aaa;font-size:10px">('+fs(nextB)+')</em></div>');
+            else parts.push('<div style="margin-bottom:3px;color:#16a34a;font-size:11px"><span style="font-size:10px;background:#f0fdf4;color:#16a34a;padding:1px 5px;border-radius:4px">📤 Kirim</span> 🟢 Siap kirim</div>');
+            const lastJ=a.last_join_at,nextJ=a.next_join_at,grupJ=a.last_join_group;
+            const nextJOk=!nextJ||new Date(nextJ.replace(' ','T'))<=now2;
+            if(lastJ) parts.push('<div style="margin-bottom:3px"><span style="font-size:10px;background:#f0fdf4;color:#16a34a;padding:1px 5px;border-radius:4px;font-weight:600">🔗 Join</span> terakhir <strong>'+fw(lastJ)+'</strong>'+(grupJ?' <span style="color:#64748b;font-size:10px">→ '+grupJ+'</span>':'')+'</div>');
+            if(nextJ&&!nextJOk) parts.push('<div><span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:4px;font-weight:600">⏳ Next join</span> <strong>'+fw(nextJ)+'</strong> <em style="color:#aaa;font-size:10px">('+fs(nextJ)+')</em></div>');
+            else parts.push('<div style="color:#16a34a;font-size:11px"><span style="font-size:10px;background:#f0fdf4;color:#16a34a;padding:1px 5px;border-radius:4px">🔗 Join</span> 🟢 Siap join</div>');
+            return parts.join('');
+        }
+        const rows=akun.map(a=>{
+            const nextJOk=!a.next_join_at||new Date((a.next_join_at||'').replace(' ','T'))<=now;
+            const nextBOk=!a.next_broadcast_at||new Date((a.next_broadcast_at||'').replace(' ','T'))<=now;
+            const ok=nextJOk&&nextBOk;
+            const btn=!ok?'<button class="btn-outline btn-sm" onclick="resetJoinThrottle(\''+a.phone+'\')" style="font-size:11px;padding:3px 8px;border-color:#f59e0b;color:#92400e">⚡ Reset</button>':'<span style="color:#aaa;font-size:11px">-</span>';
+            const sbg=a.status==='banned'?'#fee2e2':a.status==='active'?'#f0fdf4':'#f1f5f9';
+            const sc=a.status==='banned'?'#991b1b':a.status==='active'?'#166534':'#64748b';
+            return '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px 6px;font-weight:600">'+(a.nama||'-')+'</td><td style="padding:8px 6px;color:#64748b;font-size:11px">'+a.phone+'</td><td style="padding:8px 6px"><span style="font-size:11px;padding:2px 7px;border-radius:10px;background:'+sbg+';color:'+sc+'">'+a.status+'</span></td><td style="padding:8px 6px;line-height:1.8">'+cellJadwal(a)+'</td><td style="padding:8px 6px">'+btn+'</td></tr>';
+        }).join('');
+        const bd=throttle.data||{},bok=!bd.next_allowed_at||new Date(bd.next_allowed_at)<=now;
+        const bst=bok?'<div style="color:#16a34a;font-size:11px">🟢 Siap kirim</div>':'<div><span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:4px;font-weight:600">⏳ Next kirim</span> <strong>'+fw(bd.next_allowed_at)+'</strong> <em style="color:#aaa;font-size:10px">('+fs(bd.next_allowed_at)+')</em></div>';
+        const bbtn=!bok?'<button class="btn-outline btn-sm" onclick="resetBroadcastThrottle()" style="font-size:11px;padding:3px 8px;border-color:#f59e0b;color:#92400e">⚡ Reset</button>':'<span style="color:#aaa;font-size:11px">-</span>';
+        const rbroad='<tr style="border-top:2px solid #e2e8f0;background:#f8fafc"><td style="padding:8px 6px;font-weight:600">Auto Broadcast</td><td style="padding:8px 6px;color:#64748b;font-size:11px">semua akun</td><td style="padding:8px 6px"><span style="font-size:11px;padding:2px 7px;border-radius:10px;background:#eff6ff;color:#1d4ed8">global</span></td><td style="padding:8px 6px">'+bst+'</td><td style="padding:8px 6px">'+bbtn+'</td></tr>';
+        panel.innerHTML='<div class="engine-card" style="max-width:100%;overflow:auto"><div class="engine-card-header"><div class="engine-card-icon">⏱️</div><div class="engine-card-title"><div class="engine-name">Status Throttle</div><div class="engine-interval">Jadwal join & broadcast berikutnya — klik Reset untuk paksa jalan sekarang</div></div></div><table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px"><thead><tr style="background:#f8fafc;color:#64748b;font-size:11px;border-bottom:1px solid #e2e8f0"><th style="text-align:left;padding:6px">Nama</th><th style="text-align:left;padding:6px">Nomor</th><th style="text-align:left;padding:6px">Status</th><th style="text-align:left;padding:6px">Jadwal Berikutnya</th><th style="text-align:left;padding:6px">Aksi</th></tr></thead><tbody>'+rows+rbroad+'</tbody></table></div>';
+    } catch(e) { panel.innerHTML='<div style="color:#888;font-size:12px;padding:8px">Gagal: '+e.message+'</div>'; }
+}
+'@
+
+$newContent = $content.Substring(0, $startIdx) + $newFunc + $content.Substring($endIdx + 1)
+Set-Content $file $newContent -Encoding UTF8 -NoNewline
+Write-Host "✅ Berhasil! automation.js sudah diupdate."
+Write-Host "Ukuran file baru: $((Get-Item $file).Length) bytes"

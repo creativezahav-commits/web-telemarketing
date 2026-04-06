@@ -21,47 +21,47 @@ def tentukan_level(tanggal_buat: str) -> int:
 
 def get_batas_kirim(phone: str) -> int:
     conn = get_conn()
-    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=?", (phone,)).fetchone()
+    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
     conn.close()
     level = row["level_warming"] if row else 1
     return get_warming_config(level)["maks_kirim"]
 
 def get_batas_join(phone: str) -> int:
     conn = get_conn()
-    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=?", (phone,)).fetchone()
+    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
     conn.close()
     level = row["level_warming"] if row else 1
     return get_warming_config(level)["maks_join"]
 
 def get_jeda_kirim(phone: str) -> int:
     conn = get_conn()
-    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=?", (phone,)).fetchone()
+    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
     conn.close()
     level = row["level_warming"] if row else 1
     return get_warming_config(level)["jeda_kirim"]
 
 def get_jeda_join(phone: str) -> int:
     conn = get_conn()
-    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=?", (phone,)).fetchone()
+    row  = conn.execute("SELECT level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
     conn.close()
     level = row["level_warming"] if row else 1
     return get_warming_config(level)["jeda_join"]
 
 def update_level_otomatis(phone: str):
     conn = get_conn()
-    row  = conn.execute("SELECT tanggal_buat, level_warming FROM akun WHERE phone=?", (phone,)).fetchone()
+    row  = conn.execute("SELECT tanggal_buat, level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
     conn.close()
     if not row or not row["tanggal_buat"]: return
     level_baru = tentukan_level(row["tanggal_buat"])
     if level_baru != row["level_warming"]:
         conn = get_conn()
-        conn.execute("UPDATE akun SET level_warming=? WHERE phone=?", (level_baru, phone))
+        conn.execute("UPDATE akun SET level_warming=%s WHERE phone=%s", (level_baru, phone))
         conn.commit()
         conn.close()
 
 def get_info_warming(phone: str) -> dict:
     conn = get_conn()
-    row  = conn.execute("SELECT tanggal_buat, level_warming FROM akun WHERE phone=?", (phone,)).fetchone()
+    row  = conn.execute("SELECT tanggal_buat, level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
     conn.close()
     if not row: return {}
     level = row["level_warming"] or 1
@@ -75,4 +75,26 @@ def get_info_warming(phone: str) -> dict:
         "maks_join"  : cfg["maks_join"],
         "jeda_kirim" : cfg["jeda_kirim"],
         "jeda_join"  : cfg["jeda_join"],
+    }
+
+
+def get_daily_capacity(phone: str) -> dict:
+    """Single source of truth for daily join/send usage and limits."""
+    from utils.storage_db import hitung_kirim_hari_ini, hitung_join_hari_ini
+    maks_kirim = max(0, int(get_batas_kirim(phone) or 0))
+    maks_join = max(0, int(get_batas_join(phone) or 0))
+    sudah_kirim = max(0, int(hitung_kirim_hari_ini(phone) or 0))
+    sudah_join = max(0, int(hitung_join_hari_ini(phone) or 0))
+    return {
+        "phone": phone,
+        "kirim": {
+            "used": sudah_kirim,
+            "limit": maks_kirim,
+            "remaining": max(0, maks_kirim - sudah_kirim),
+        },
+        "join": {
+            "used": sudah_join,
+            "limit": maks_join,
+            "remaining": max(0, maks_join - sudah_join),
+        },
     }

@@ -1,27 +1,75 @@
 # ============================================================
-# core/broadcast_session.py v2
-# Broadcast dengan rotasi akun otomatis + riwayat tersimpan
+# core/broadcast_session.py v4
+# Semi-paralel: setiap akun punya thread & loop sendiri
 # ============================================================
 
-import asyncio
-import random
+import asyncio, random, threading
 from datetime import datetime
-from utils.storage_db import catat_riwayat
+from utils.settings_manager import get_int as get_setting_int
+from utils.storage_db import catat_riwayat, tandai_grup_masa_istirahat, update_last_kirim_grup
 
 _sesi_aktif: dict = {}
 
 
-def buat_sesi(
-    daftar_phone: list,   # list akun yang akan dirotasi
-    grup_list: list,
-    pesan: str,
-    jeda: int
-) -> str:
-    session_id = f"sesi_{datetime.now().strftime('%H%M%S')}_{daftar_phone[0][-4:]}"
+async def _resolve_entity(client, gid: int):
+    """
+    Resolve grup_id ke entity Telethon dengan benar.
 
-    _sesi_aktif[session_id] = {
-        "session_id"   : session_id,
-        "daftar_phone" : daftar_phone,   # semua akun yang dipakai
+    Masalah: SearchRequest / scraper menyimpan ID Channel sebagai angka positif
+    (misal 1366400674), tapi Telethon butuh PeerChannel atau ID negatif (-1001366400674).
+    Kalau langsung get_entity(1366400674) → Telethon anggap PeerUser → error.
+
+    Solusi: coba beberapa cara secara berurutan sampai berhasil.
+    """
+    from telethon.tl.types import PeerChannel, PeerChat
+
+    gid = int(gid)
+
+    # Cara 1: coba langsung (works kalau ID sudah dalam cache Telethon)
+    try:
+        return await client.get_entity(gid)
+    except Exception:
+        pass
+
+    # Cara 2: coba sebagai PeerChannel (supergroup/channel positif)
+    if gid > 0:
+        try:
+            return await client.get_entity(PeerChannel(gid))
+        except Exception:
+            pass
+
+    # Cara 3: coba ID negatif format channel (-1001234567890)
+    if gid > 0:
+        try:
+            return await client.get_entity(-(1000000000000 + gid))
+        except Exception:
+            pass
+
+    # Cara 4: coba sebagai PeerChat (basic group, ID negatif kecil)
+    if gid < 0:
+        try:
+            return await client.get_entity(PeerChat(-gid))
+        except Exception:
+            pass
+
+    # Cara 5: coba username dari database kalau ada
+    from utils.storage_db import get_semua_grup
+    try:
+        grups = get_semua_grup()
+        target = next((g for g in grups if g.get("id") == gid), None)
+        if target and target.get("username"):
+            return await client.get_entity(target["username"])
+    except Exception:
+        pass
+
+    raise ValueError(f"Tidak bisa resolve entity untuk grup ID {gid}")
+
+
+def buat_sesi(daftar_phone, grup_list, pesan, jeda):
+    sid = f"sesi_{datetime.now().strftime('%H%M%S')}_{daftar_phone[0][-4:]}"
+    _sesi_aktif[sid] = {
+        "session_id"   : sid,
+        "daftar_phone" : daftar_phone,
         "pesan"        : pesan,
         "jeda"         : jeda,
         "status"       : "menunggu",
@@ -30,122 +78,197 @@ def buat_sesi(
         "hasil"        : [],
         "mulai"        : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "grup_list"    : grup_list,
+        "grup_per_akun": {},
         "stop"         : False,
         "countdown"    : 0
     }
-
-    return session_id
-
-
-def get_sesi(session_id: str) -> dict:
-    return _sesi_aktif.get(session_id)
+    return sid
 
 
-def get_semua_sesi() -> list:
-    return list(_sesi_aktif.values())
+def get_sesi(sid):    return _sesi_aktif.get(sid)
+def get_semua_sesi(): return list(_sesi_aktif.values())
+def stop_sesi(sid):
+    if sid in _sesi_aktif: _sesi_aktif[sid]["stop"] = True
+def hapus_sesi(sid):
+    if sid in _sesi_aktif: del _sesi_aktif[sid]
 
 
-def stop_sesi(session_id: str):
-    if session_id in _sesi_aktif:
-        _sesi_aktif[session_id]["stop"] = True
-
-
-def hapus_sesi(session_id: str):
-    if session_id in _sesi_aktif:
-        del _sesi_aktif[session_id]
-
-
-async def jalankan_sesi(session_id: str, semua_client: dict):
+def jalankan_sesi_thread(session_id: str, semua_client: dict):
     """
-    Jalankan broadcast dengan rotasi akun.
-
-    semua_client: dict { phone: TelegramClient }
+    Semi-paralel: setiap akun berjalan di thread terpisah.
+    Masing-masing kirim ke grup miliknya sendiri.
     """
+    from services.account_manager import _loop
+
     sesi = _sesi_aktif.get(session_id)
-    if not sesi:
-        return
+    if not sesi: return
 
-    sesi["status"]  = "berjalan"
-    jeda            = sesi["jeda"]
-    daftar_phone    = sesi["daftar_phone"]
-    jumlah_akun     = len(daftar_phone)
+    grup_per_akun = sesi.get("grup_per_akun", {})
 
-    for i, grup in enumerate(sesi["grup_list"]):
+    if grup_per_akun:
+        # Mode per-akun: setiap akun punya thread sendiri
+        sesi["status"] = "berjalan"
+        threads = []
+        for phone, grup_list in grup_per_akun.items():
+            client = semua_client.get(phone)
+            if not client:
+                print(f"[Broadcast] Akun {phone} tidak online, skip")
+                continue
+            future = asyncio.run_coroutine_threadsafe(
+                _kirim_per_akun(session_id, phone, grup_list, client),
+                _loop
+            )
+            def watch(f=future, p=phone):
+                try: f.result(timeout=7200)
+                except Exception as e: print(f"[Broadcast] {p} error: {e}")
+            t = threading.Thread(target=watch, daemon=True)
+            t.start()
+            threads.append(t)
+    else:
+        # Mode lama (fallback)
+        future = asyncio.run_coroutine_threadsafe(
+            _kirim(session_id, semua_client), _loop
+        )
+        def watch():
+            try: future.result(timeout=7200)
+            except Exception as e: print(f"[Broadcast] Error: {e}")
+        threading.Thread(target=watch, daemon=True).start()
 
-        # Cek stop
-        if sesi["stop"]:
-            sesi["status"] = "dihentikan"
-            _update_hasil(sesi, grup, "dihentikan", "-", "Dihentikan operator")
-            break
 
-        # Pilih akun berdasarkan rotasi
-        index_akun = i % jumlah_akun
-        phone      = daftar_phone[index_akun]
-        client     = semua_client.get(phone)
+async def _kirim_per_akun(session_id: str, phone: str, grup_list: list, client):
+    """Kirim pesan ke daftar grup menggunakan 1 akun."""
+    sesi = _sesi_aktif.get(session_id)
+    if not sesi: return
 
-        grup_id   = grup["id"]
-        nama_grup = grup["nama"]
+    jeda_min = 20
+    jeda_max = 60
 
-        # Kalau akun tidak tersedia, skip
-        if not client:
-            _update_hasil(sesi, grup, "skip", phone, f"Akun {phone} tidak tersedia")
-            catat_riwayat(phone, grup_id, nama_grup, "skip")
-            continue
+    print(f"[Broadcast] {phone} mulai kirim ke {len(grup_list)} grup")
 
-        # Tandai sedang mengirim
-        _update_hasil(sesi, grup, "mengirim", phone, "Sedang mengirim...")
+    for i, grup in enumerate(grup_list):
+        if sesi["stop"]: break
+
+        gid  = grup["id"]
+        nama = grup["nama"]
+
+        # Cek batas warming sebelum kirim
+        try:
+            from core.warming import get_daily_capacity
+            kapasitas = get_daily_capacity(phone)
+            sudah = int(kapasitas.get("kirim", {}).get("used") or 0)
+            batas = int(kapasitas.get("kirim", {}).get("limit") or 0)
+            sisa = int(kapasitas.get("kirim", {}).get("remaining") or 0)
+            if batas > 0 and sudah >= batas:
+                print(f"[Broadcast] {phone} sudah mencapai batas harian ({sudah}/{batas}, sisa {sisa}), berhenti")
+                _update(sesi, {"id": gid, "nama": nama}, "skip", phone, f"Batas harian tercapai ({sudah}/{batas}, sisa {sisa})")
+                break  # akun ini sudah habis kuota, berhenti
+        except Exception:
+            pass
+
+        print(f"[Broadcast] {phone} [{i+1}/{len(grup_list)}] {nama}")
+
+        _update(sesi, {"id":gid,"nama":nama}, "mengirim", phone, "Mengirim...")
 
         try:
-            entity = await client.get_entity(int(grup_id))
+            entity = await _resolve_entity(client, gid)
             await client.send_message(entity, sesi["pesan"])
-
-            # Berhasil
-            _update_hasil(sesi, grup, "berhasil", phone, "Terkirim")
+            print(f"[Broadcast] ✅ {nama}")
+            _update(sesi, {"id":gid,"nama":nama}, "berhasil", phone, "Terkirim")
             sesi["selesai"] += 1
-
-            # Simpan ke riwayat database
-            catat_riwayat(phone, grup_id, nama_grup, "berhasil")
+            catat_riwayat(phone, gid, nama, "send_success")
+            update_last_kirim_grup(gid)
+            cooldown_minutes = get_setting_int('broadcast_cooldown_grup_menit', get_setting_int('campaign_group_cooldown_minutes', 0))
+            cooldown_hours = get_setting_int('broadcast_cooldown_grup_jam', get_setting_int('campaign_group_cooldown_hours', 0))
+            tandai_grup_masa_istirahat(gid, cooldown_hours=cooldown_hours, cooldown_minutes=cooldown_minutes)
+            catat_riwayat(phone, gid, nama, 'cooldown_started')
 
         except Exception as e:
-            pesan_error = str(e)[:100]
-            _update_hasil(sesi, grup, "gagal", phone, pesan_error)
-            catat_riwayat(phone, grup_id, nama_grup, "gagal")
+            err = str(e)[:150]
+            print(f"[Broadcast] ❌ {nama} — {err}")
+            _update(sesi, {"id":gid,"nama":nama}, "gagal", phone, err)
+            catat_riwayat(phone, gid, nama, "send_failed", err)
+            # Kalau error karena tidak bisa kirim (channel/belum join) → skip jeda
+            # supaya tidak buang waktu tunggu 30-60 detik untuk grup yang memang tidak bisa
+            err_lower = err.lower()
+            if any(x in err_lower for x in [
+                "can't write", "write_forbidden", "forbidden",
+                "not a member", "chat_write_forbidden"
+            ]):
+                print(f"[Broadcast] ⏭️ {nama} dilewati (tidak bisa kirim), skip jeda")
+                continue  # langsung ke grup berikutnya tanpa jeda
 
-        # Jeda sebelum grup berikutnya
-        if i < len(sesi["grup_list"]) - 1 and not sesi["stop"]:
-            # Variasi kecil agar natural
-            jeda_aktual = max(1, jeda + random.randint(-2, 3))
-            sesi["countdown"] = jeda_aktual
-
-            for detik in range(jeda_aktual, 0, -1):
-                if sesi["stop"]:
-                    break
-                sesi["countdown"] = detik
+        if i < len(grup_list) - 1 and not sesi["stop"]:
+            jeda = random.randint(jeda_min, jeda_max)
+            print(f"[Broadcast] {phone} jeda {jeda}s...")
+            for d in range(jeda, 0, -1):
+                if sesi["stop"]: break
+                sesi["countdown"] = d
                 await asyncio.sleep(1)
-
             sesi["countdown"] = 0
 
-    if sesi["status"] == "berjalan":
-        sesi["status"] = "selesai"
+    print(f"[Broadcast] {phone} selesai!")
 
+    # Cek apakah semua akun sudah selesai
+    total_hasil = len(sesi["hasil"])
+    if total_hasil >= sesi["total"]:
+        sesi["status"] = "selesai"
+        sesi["selesai_pada"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def _kirim(session_id: str, semua_client: dict):
+    """Fallback mode lama."""
+    sesi = _sesi_aktif.get(session_id)
+    if not sesi: return
+    sesi["status"] = "berjalan"
+    phones = sesi["daftar_phone"]
+    n      = len(phones)
+    jeda   = sesi["jeda"]
+
+    for i, grup in enumerate(sesi["grup_list"]):
+        if sesi["stop"]: sesi["status"] = "dihentikan"; break
+        phone  = phones[i % n]
+        client = semua_client.get(phone)
+        gid, nama = grup["id"], grup["nama"]
+        if not client:
+            _update(sesi, grup, "skip", phone, "Akun tidak tersedia")
+            continue
+        _update(sesi, grup, "mengirim", phone, "Mengirim...")
+        try:
+            entity = await _resolve_entity(client, gid)
+            await client.send_message(entity, sesi["pesan"])
+            _update(sesi, grup, "berhasil", phone, "Terkirim")
+            sesi["selesai"] += 1
+            catat_riwayat(phone, gid, nama, "send_success")
+            update_last_kirim_grup(gid)
+            cooldown_minutes = get_setting_int('broadcast_cooldown_grup_menit', get_setting_int('campaign_group_cooldown_minutes', 0))
+            cooldown_hours = get_setting_int('broadcast_cooldown_grup_jam', get_setting_int('campaign_group_cooldown_hours', 0))
+            tandai_grup_masa_istirahat(gid, cooldown_hours=cooldown_hours, cooldown_minutes=cooldown_minutes)
+            catat_riwayat(phone, gid, nama, 'cooldown_started')
+        except Exception as e:
+            err = str(e)[:150]
+            _update(sesi, grup, "gagal", phone, err)
+            catat_riwayat(phone, gid, nama, "send_failed", err)
+        if i < len(sesi["grup_list"]) - 1 and not sesi["stop"]:
+            j = random.randint(max(1,jeda-5), jeda+5)
+            for d in range(j, 0, -1):
+                if sesi["stop"]: break
+                sesi["countdown"] = d
+                await asyncio.sleep(1)
+            sesi["countdown"] = 0
+
+    if sesi["status"] == "berjalan": sesi["status"] = "selesai"
     sesi["selesai_pada"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-# ── INTERNAL ──────────────────────────────────────────────
-def _update_hasil(sesi, grup, status, phone, pesan):
+async def jalankan_sesi(sid, clients):
+    await _kirim(sid, clients)
+
+
+def _update(sesi, grup, status, phone, pesan):
     for h in sesi["hasil"]:
         if h["grup_id"] == grup["id"]:
-            h["status"] = status
-            h["phone"]  = phone
-            h["pesan"]  = pesan
-            h["waktu"]  = datetime.now().strftime("%H:%M:%S")
-            return
-
-    sesi["hasil"].append({
-        "grup_id"  : grup["id"],
-        "nama_grup": grup["nama"],
-        "status"   : status,
-        "phone"    : phone,
-        "pesan"    : pesan,
-        "waktu"    : datetime.now().strftime("%H:%M:%S")
-    })
+            h.update({"status":status,"phone":phone,"pesan":pesan,
+                      "waktu":datetime.now().strftime("%H:%M:%S")}); return
+    sesi["hasil"].append({"grup_id":grup["id"],"nama_grup":grup["nama"],
+        "status":status,"phone":phone,"pesan":pesan,
+        "waktu":datetime.now().strftime("%H:%M:%S")})

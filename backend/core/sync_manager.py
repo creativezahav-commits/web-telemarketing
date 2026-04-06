@@ -1,6 +1,6 @@
-# Sinkronisasi akun — auto-join grup Hot yang belum diikuti
+# Sinkronisasi akun – auto-join grup Hot yang belum diikuti
 import asyncio
-from utils.storage_db import get_grup_hot, catat_riwayat, hitung_join_hari_ini
+from utils.storage_db import get_grup_hot, catat_riwayat, hitung_join_hari_ini, set_join_throttle
 from core.warming import get_batas_join, get_jeda_join
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
@@ -40,7 +40,11 @@ async def jalankan_sync(sid: str, client):
                 await client(JoinChannelRequest(entity))
             sesi["hasil"].append({"grup": grup["nama"], "status": "join"})
             sesi["selesai"] += 1
-            catat_riwayat(phone, grup["id"], grup["nama"], "join")
+            catat_riwayat(phone, grup["id"], grup["nama"], "join_success")
+
+            # ✅ BARU: catat throttle join setelah berhasil join
+            set_join_throttle(phone, grup["nama"], jeda)
+
         except UserAlreadyParticipantError:
             sesi["hasil"].append({"grup": grup["nama"], "status": "sudah_join"})
         except FloodWaitError as e:
@@ -48,6 +52,7 @@ async def jalankan_sync(sid: str, client):
             continue
         except Exception as e:
             sesi["hasil"].append({"grup": grup["nama"], "status": "gagal", "pesan": str(e)})
+            catat_riwayat(phone, grup["id"], grup["nama"], "join_failed", str(e)[:150])
 
         if i < len(sesi["grup_list"]) - 1:
             await asyncio.sleep(jeda)

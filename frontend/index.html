@@ -8,69 +8,186 @@
 </head>
 <body>
 <div class="sidebar">
-  <h2>📱 TG Dashboard</h2>
+  <div class="sidebar-brand">
+    <h2>📱 TG Dashboard</h2>
+    <div class="sidebar-subtitle">Automation control center</div>
+  </div>
   <nav>
-    <a id="menu-akun"      onclick="tampilTab('akun')"     >👤 Akun</a>
-    <a id="menu-analisis"  onclick="tampilTab('analisis')" >📊 Analisis Grup</a>
-    <a id="menu-discovery" onclick="tampilTab('discovery')">🔍 Discovery</a>
-    <a id="menu-draft"     onclick="tampilTab('draft')"    >📝 Draft</a>
-    <a id="menu-antrian"   onclick="tampilTab('antrian')"  >📋 Antrian</a>
-    <a id="menu-kirim"     onclick="tampilTab('kirim')"    >✉️ Kirim</a>
-    <a id="menu-broadcast" onclick="tampilTab('broadcast')">📡 Broadcast</a>
-    <a id="menu-sync"      onclick="tampilTab('sync')"     >🔄 Sinkronisasi</a>
-    <a id="menu-riwayat"   onclick="tampilTab('riwayat')"  >📈 Riwayat</a>
-    <a id="menu-settings"  onclick="tampilTab('settings')" >⚙️ Settings</a>
+    <div class="nav-section">
+      <div class="nav-label">Operasional</div>
+      <a id="menu-akun" onclick="tampilTab('akun')">👤 Akun</a>
+      <a id="menu-analisis" onclick="tampilTab('analisis')">📊 Analisis Grup</a>
+      <a id="menu-discovery" onclick="tampilTab('discovery')">🔍 Discovery</a>
+      <a id="menu-scraper" onclick="tampilTab('scraper')">🧲 Scraper</a>
+      <a id="menu-draft" onclick="tampilTab('draft')">📝 Draft</a>
+      <a id="menu-kirim" onclick="tampilTab('kirim')">✉️ Kirim</a>
+      <a id="menu-broadcast" onclick="tampilTab('broadcast')">📡 Broadcast</a>
+      <a id="menu-sync" onclick="tampilTab('sync')">🔄 Sinkronisasi</a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Engine & Kontrol</div>
+      <a id="menu-automation" onclick="tampilTab('automation')">🤖 Automation Rules</a>
+      <a id="menu-groupstates" onclick="tampilTab('groupstates')">🧭 State Grup</a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Audit</div>
+      <a id="menu-riwayat" onclick="tampilTab('riwayat')">📈 Riwayat</a>
+      <a id="menu-diagnosa" onclick="tampilTab('diagnosa')">🔬 Diagnosa Macet</a>
+      <a id="menu-settings" onclick="tampilTab('settings')">⚙️ Pengaturan Umum</a>
+    </div>
   </nav>
   <div class="sidebar-footer" id="sidebar-summary"></div>
 </div>
 
 <div class="konten">
+  <div class="app-topbar">
+    <div>
+      <div class="eyebrow">Telegram Automation Dashboard</div>
+      <h1 id="app-title">Manajemen Akun</h1>
+      <p id="app-subtitle">Kelola akun Telegram, grup, campaign, dan scraper dari satu panel.</p>
+    </div>
+    <div class="topbar-actions">
+      <span id="health-badge" class="health-badge offline">Backend belum dicek</span>
+      <button class="btn-outline btn-sm" onclick="refreshTabAktif()">🔄 Refresh tab</button>
+    </div>
+  </div>
 
   <!-- AKUN -->
   <div id="tab-akun" class="tab">
     <h2>👤 Daftar Akun</h2>
-    <div id="ringkasan-akun-grid" class="akun-grid" style="margin-bottom:20px"></div>
-    <div id="list-akun"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
-    <hr>
-    <div class="section-card" id="form-login">
-      <h3>➕ Tambah Akun</h3>
-      <div class="form-group">
-        <label>Nomor HP</label>
-        <input id="input-phone" placeholder="+628123456789" type="tel">
+
+    <div class="akun-top-stack">
+      <div class="section-card" id="form-login">
+        <div class="section-head compact">
+          <div>
+            <h3>➕ Tambah Akun</h3>
+            <div class="hint">Diletakkan di atas agar mudah diakses walau akun sudah banyak.</div>
+          </div>
+        </div>
+        <div class="form-grid-2 akun-top-form-grid">
+          <div class="form-group" style="margin:0">
+            <label>Nomor HP</label>
+            <input id="input-phone" placeholder="+628123456789" type="tel">
+          </div>
+          <div class="form-group" style="margin:0;display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap">
+            <button class="btn-primary" onclick="loginAkun()">🔗 Login</button>
+            <div class="hint">Masukkan nomor akun Telegram lalu lanjutkan OTP.</div>
+          </div>
+        </div>
+        <div id="pesan-akun" class="pesan-status"></div>
       </div>
-      <button class="btn-primary" onclick="loginAkun()">🔗 Login</button>
-      <div id="pesan-akun" class="pesan-status"></div>
+
+      <div class="section-card" id="form-otp" style="display:none">
+        <div class="section-head compact">
+          <div>
+            <h3>📱 Masukkan Kode OTP</h3>
+            <div class="hint">Buka Telegram lalu cari pesan dari Telegram untuk kode masuk.</div>
+          </div>
+        </div>
+        <div class="form-grid-3 akun-top-form-grid">
+          <div class="form-group" style="margin:0">
+            <label>Nomor HP</label>
+            <input id="otp-phone" readonly style="background:#f8fafc;color:#888">
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Kode OTP (5 digit)</label>
+            <input id="input-otp" placeholder="12345" maxlength="5" type="text"
+                   inputmode="numeric" style="font-size:24px;letter-spacing:8px;max-width:220px">
+          </div>
+          <div class="form-group" id="form-2fa" style="display:none;margin:0">
+            <label>Password 2FA</label>
+            <input id="input-2fa" placeholder="Password Telegram" type="password">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <button class="btn-success" onclick="submitOtp()">✅ Verifikasi OTP</button>
+          <button class="btn-outline" onclick="batalOtp()">❌ Batal</button>
+        </div>
+        <div id="pesan-otp" class="pesan-status"></div>
+      </div>
+
+      <div id="panel-konfig-akun" class="section-card" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <div>
+            <h3 id="judul-konfig-akun">⚙️ Konfigurasi Assign Akun</h3>
+            <div id="subjudul-konfig-akun" style="font-size:12px;color:#64748b">Atur override per akun bila akun sebenarnya sehat tetapi baru login.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn-outline btn-sm" onclick="pakaiDefaultKonfigAkun()">↺ Gunakan Default</button>
+            <button class="btn-outline btn-sm" onclick="tutupKonfigAkun()">✖ Tutup</button>
+          </div>
+        </div>
+        <div id="akun-default-info" class="akun-default-strip" style="margin-top:14px"></div>
+
+        <!-- Edit Score & Health Score langsung -->
+        <div style="margin-top:14px;padding:12px 14px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px">
+          <div style="font-weight:700;font-size:13px;margin-bottom:10px;color:#15803d">✏️ Edit Score Akun</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">
+            <div class="form-group">
+              <label>Score Akun <span style="font-size:11px;color:#888">(0–100, pengaruhi ranking)</span></label>
+              <input id="cfg-score" type="number" min="0" max="100" placeholder="Kosongkan = tidak diubah">
+            </div>
+            <div class="form-group">
+              <label>Health Score <span style="font-size:11px;color:#888">(min 50 agar lolos auto assign)</span></label>
+              <div style="display:flex;gap:6px">
+                <input id="cfg-health-score" type="number" min="0" max="100" placeholder="Kosongkan = tidak diubah" style="flex:1">
+                <button class="btn-success btn-sm" onclick="resetHealthScore(akunConfigAktifPhone)" title="Reset ke 100">↺ 100</button>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:11px;color:#888;margin-top:6px">
+            💡 Health score di bawah 50 menyebabkan akun tidak lolos ke auto assign. Klik "↺ 100" untuk reset cepat.
+          </div>
+        </div>
+
+        <div class="akun-config-grid" style="margin-top:14px">
+          <div class="form-group"><label><input type="checkbox" id="cfg-auto-assign-enabled"> Auto assign aktif</label></div>
+          <div class="form-group"><label>Priority weight <span class="field-default" id="default-priority-weight"></span></label><input id="cfg-priority-weight" type="number" min="0"></div>
+          <div class="form-group"><label>Daily new group cap <span class="field-default" id="default-daily-new-group-cap"></span></label><input id="cfg-daily-new-group-cap" type="number" min="0"></div>
+          <div class="form-group"><label><input type="checkbox" id="cfg-manual-health-enabled"> Override health manual</label></div>
+          <div class="form-group"><label>Health override score <span class="field-default" id="default-manual-health-score"></span></label><input id="cfg-manual-health-score" type="number" min="0" max="100"></div>
+          <div class="form-group"><label><input type="checkbox" id="cfg-manual-warming-enabled"> Override warming manual</label></div>
+          <div class="form-group"><label>Warming override level <span class="field-default" id="default-manual-warming-level"></span></label><input id="cfg-manual-warming-level" type="number" min="1" max="4"></div>
+          <div class="form-group"><label><input type="checkbox" id="cfg-fresh-login-grace-enabled"> Fresh login grace aktif</label></div>
+          <div class="form-group"><label>Grace menit setelah login <span class="field-default" id="default-fresh-login-grace-minutes"></span></label><input id="cfg-fresh-login-grace-minutes" type="number" min="0"></div>
+          <div class="form-group"><label>Health floor saat grace <span class="field-default" id="default-fresh-login-health-floor"></span></label><input id="cfg-fresh-login-health-floor" type="number" min="0" max="100"></div>
+          <div class="form-group"><label>Warming floor saat grace <span class="field-default" id="default-fresh-login-warming-floor"></span></label><input id="cfg-fresh-login-warming-floor" type="number" min="1" max="4"></div>
+          <div class="form-group" style="grid-column:1/-1"><label>Catatan assignment</label><textarea id="cfg-assignment-notes" rows="3" placeholder="Contoh: akun sehat, baru login ulang, izinkan grace 3 jam."></textarea></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <button class="btn-primary" onclick="simpanKonfigAkun()">💾 Simpan Konfigurasi</button>
+          <button class="btn-outline" onclick="isiPresetGraceAkun()">⚡ Preset Akun Baru Login Tapi Sehat</button>
+          <span id="pesan-konfig-akun" class="pesan-status"></span>
+        </div>
+      </div>
     </div>
-    <div class="section-card" id="form-otp" style="display:none">
-      <h3>📱 Masukkan Kode OTP</h3>
-      <p style="font-size:13px;color:#555;margin-bottom:14px">Buka Telegram → cari pesan dari <strong>Telegram</strong>.</p>
-      <div class="form-group">
-        <label>Nomor HP</label>
-        <input id="otp-phone" readonly style="background:#f8fafc;color:#888">
-      </div>
-      <div class="form-group">
-        <label>Kode OTP (5 digit)</label>
-        <input id="input-otp" placeholder="12345" maxlength="5" type="text"
-               inputmode="numeric" style="font-size:24px;letter-spacing:8px;max-width:200px">
-      </div>
-      <div class="form-group" id="form-2fa" style="display:none">
-        <label>Password 2FA</label>
-        <input id="input-2fa" placeholder="Password Telegram" type="password">
-      </div>
-      <div style="display:flex;gap:10px">
-        <button class="btn-success" onclick="submitOtp()">✅ Verifikasi OTP</button>
-        <button class="btn-outline" onclick="batalOtp()">❌ Batal</button>
-      </div>
-      <div id="pesan-otp" class="pesan-status"></div>
-    </div>
+
+    <div id="ringkasan-akun-grid" style="display:none"></div>
+    <div id="list-akun" class="akun-card-grid"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
   </div>
 
   <!-- ANALISIS GRUP -->
   <div id="tab-analisis" class="tab" style="display:none">
     <h2>📊 Analisis Grup</h2>
-    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn-outline" onclick="muatAnalisis()">🔄 Refresh</button>
-      <button class="btn-outline" onclick="updateSemuaScore()">🧮 Hitung Ulang Score</button>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      <!-- Pencarian -->
+      <input id="cari-analisis" placeholder="🔍 Cari nama atau username grup..."
+        style="flex:1;min-width:200px;max-width:360px"
+        oninput="renderTabelAnalisis()">
+      <!-- Filter label -->
+      <div style="display:flex;gap:4px">
+        <button class="btn-outline btn-sm filter-btn-analisis aktif-filter" id="filter-semua"
+          onclick="filterAnalisis('semua')">Semua</button>
+        <button class="btn-outline btn-sm filter-btn-analisis" id="filter-Hot"
+          onclick="filterAnalisis('Hot')">🔥 Hot</button>
+        <button class="btn-outline btn-sm filter-btn-analisis" id="filter-Normal"
+          onclick="filterAnalisis('Normal')">✅ Normal</button>
+        <button class="btn-outline btn-sm filter-btn-analisis" id="filter-Skip"
+          onclick="filterAnalisis('Skip')">⏭️ Skip</button>
+      </div>
+      <!-- Aksi -->
+      <button class="btn-outline btn-sm" onclick="muatAnalisis()">🔄 Refresh</button>
+      <button class="btn-outline btn-sm" onclick="updateSemuaScore()">🧮 Hitung Score</button>
     </div>
     <div id="tabel-analisis">
       <div class="loading"><span class="spinner"></span> Memuat...</div>
@@ -80,6 +197,7 @@
   <!-- DISCOVERY -->
   <div id="tab-discovery" class="tab" style="display:none">
     <h2>🔍 Discovery Grup</h2>
+    <div class="page-grid page-grid-2">
     <div class="section-card">
       <h3>🔄 Fetch Grup Baru dari Akun</h3>
       <p style="font-size:13px;color:#666;margin-bottom:12px">Tampilkan grup yang akun sudah ikuti tapi belum ada di database.</p>
@@ -103,14 +221,232 @@
       <button class="btn-primary" onclick="tambahGrupManual()">➕ Tambah ke Sistem</button>
       <div id="pesan-discovery-manual" class="pesan-status"></div>
     </div>
+    </div>
     <div id="list-discovery">
       <div class="empty-state"><div class="icon">🔍</div><p>Klik "Cari Grup Baru" untuk mulai discovery.</p></div>
     </div>
   </div>
 
-  <!-- DRAFT -->
+  <!-- SCRAPER -->
+  <div id="tab-scraper" class="tab" style="display:none">
+    <h2>🧲 Scraper Grup Telegram</h2>
+    <div class="scraper-layout">
+      <div class="scraper-main">
+        <div class="section-card">
+          <div class="section-head">
+            <div>
+              <h3>🎯 Buat Job Scraper</h3>
+              <div class="hint">Auto keyword bisa dibuat dari huruf, angka, tahun, turunan kata, atau daftar custom. Hasil akan masuk ke review dulu sebelum diimpor ke database grup utama.</div>
+            </div>
+            <div class="scraper-actions">
+              <button class="btn-outline btn-sm" onclick="previewScraperKeywords()">👁️ Preview Keyword</button>
+              <button class="btn-primary btn-sm" onclick="jalankanScraper()">🚀 Mulai Job</button>
+            </div>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label>Akun scraper</label>
+              <select id="scraper-akun"></select>
+            </div>
+            <div class="form-group">
+              <label>Hasil per keyword</label>
+              <input id="scraper-limit" type="number" min="5" max="100" value="30">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Keyword dasar</label>
+            <textarea id="scraper-keywords" rows="4" placeholder="Contoh:
+loker medan
+lowongan kerja medan
+info kerja sumut"></textarea>
+            <div class="hint">Bisa isi satu atau banyak keyword dasar. Pisahkan dengan baris baru, koma, atau titik koma.</div>
+          </div>
+
+          <div class="scraper-subtitle">⚙️ Mesin Auto Keyword</div>
+          <div class="form-grid-4">
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-include-base" type="checkbox" checked> Sertakan keyword dasar</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-expand-terms" type="checkbox" checked> Smart expand kata</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-suffix-letters" type="checkbox"> Suffix huruf</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-prefix-letters" type="checkbox"> Prefix huruf</label>
+            </div>
+          </div>
+          <div class="form-grid-4">
+            <div class="form-group">
+              <label>Huruf suffix</label>
+              <div class="inline-pair"><input id="scraper-suffix-start" value="a" maxlength="1"><input id="scraper-suffix-end" value="z" maxlength="1"></div>
+            </div>
+            <div class="form-group">
+              <label>Huruf prefix</label>
+              <div class="inline-pair"><input id="scraper-prefix-start" value="a" maxlength="1"><input id="scraper-prefix-end" value="f" maxlength="1"></div>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-number-enabled" type="checkbox"> Variasi angka</label>
+            </div>
+            <div class="form-group">
+              <label>Range angka</label>
+              <div class="inline-pair"><input id="scraper-number-start" type="number" value="1" min="0"><input id="scraper-number-end" type="number" value="20" min="0"></div>
+            </div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-year-enabled" type="checkbox"> Tambah tahun</label>
+            </div>
+            <div class="form-group">
+              <label>Daftar tahun</label>
+              <input id="scraper-years-text" value="2024,2025,2026" placeholder="2024,2025,2026">
+            </div>
+            <div class="form-group">
+              <label>Maks keyword generated</label>
+              <input id="scraper-max-terms" type="number" min="1" max="500" value="80">
+            </div>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label>Turunan kata</label>
+              <textarea id="scraper-derived-terms" rows="3" placeholder="admin, sales, kerja, karir, lowongan"></textarea>
+              <label class="compact-inline"><input id="scraper-derived-enabled" type="checkbox"> Aktifkan turunan kata</label>
+            </div>
+            <div class="form-group">
+              <label>Custom list / pola</label>
+              <textarea id="scraper-custom-terms" rows="3" placeholder="rumah sakit
+hotel
+{base} resmi"></textarea>
+              <label class="compact-inline"><input id="scraper-custom-enabled" type="checkbox"> Aktifkan custom list</label>
+            </div>
+          </div>
+
+          <div class="scraper-subtitle">🛡️ Filter & Keamanan</div>
+          <div class="form-grid-4">
+            <div class="form-group">
+              <label>Min. member</label>
+              <input id="scraper-min-members" type="number" min="0" value="0">
+            </div>
+            <div class="form-group">
+              <label>Score rekomendasi</label>
+              <input id="scraper-recommended-score" type="number" min="1" max="100" value="40">
+            </div>
+            <div class="form-group">
+              <label>Delay keyword min (detik)</label>
+              <input id="scraper-delay-min" type="number" min="0.2" step="0.1" value="0.8">
+            </div>
+            <div class="form-group">
+              <label>Delay keyword max (detik)</label>
+              <input id="scraper-delay-max" type="number" min="0.2" step="0.1" value="1.6">
+            </div>
+          </div>
+          <div class="form-grid-4">
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-require-username" type="checkbox" checked> Hanya yang punya username</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-include-basic" type="checkbox" checked> Basic group</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-include-super" type="checkbox" checked> Supergroup</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-include-channels" type="checkbox"> Sertakan channel</label>
+            </div>
+          </div>
+          <div class="form-group checkbox-group compact-check">
+            <label><input id="scraper-enrich" type="checkbox"> Ambil detail tambahan (lebih lambat, tapi bisa dapat member/deskripsi lebih lengkap)</label>
+          </div>
+          <div id="pesan-scraper" class="pesan-status"></div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-head">
+            <div>
+              <h3>👁️ Preview Auto Keyword</h3>
+              <div class="hint">Cek dulu daftar keyword yang akan dijalankan sebelum membuat job.</div>
+            </div>
+            <button class="btn-outline btn-sm" onclick="previewScraperKeywords()">🔄 Refresh Preview</button>
+          </div>
+          <div id="scraper-preview-summary" class="hint">Belum ada preview.</div>
+          <div id="scraper-preview-counts" class="stats-grid mini"></div>
+          <div id="scraper-preview-list" class="keyword-chip-list empty-chip">Preview keyword akan muncul di sini.</div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-head">
+            <div>
+              <h3>📦 Hasil Scrape</h3>
+              <div class="hint">Pilih job untuk melihat hasil, lalu impor hasil terbaik ke database grup utama.</div>
+            </div>
+            <div class="scraper-actions">
+              <button class="btn-outline btn-sm" onclick="muatHasilScraper()">🔄 Refresh Hasil</button>
+              <button class="btn-success btn-sm" onclick="imporPilihanScraper()">➕ Impor Pilihan</button>
+              <button class="btn-primary btn-sm" onclick="imporRekomendasiScraper()">⭐ Impor Rekomendasi</button>
+              <button class="btn-outline btn-sm" onclick="imporSemuaScraper()">📥 Impor Semua</button>
+            </div>
+          </div>
+          <div class="form-grid-4" style="margin-top:12px">
+            <div class="form-group">
+              <label>Job aktif</label>
+              <select id="scraper-job-select" onchange="gantiJobScraper(this.value)"></select>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-filter-new" type="checkbox" checked onchange="muatHasilScraper()"> Hanya yang belum ada di DB</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-filter-recommended" type="checkbox" onchange="muatHasilScraper()"> Hanya rekomendasi</label>
+            </div>
+            <div class="form-group checkbox-group compact-check">
+              <label><input id="scraper-filter-imported" type="checkbox" onchange="muatHasilScraper()"> Tampilkan yang sudah diimpor</label>
+            </div>
+          </div>
+          <div id="scraper-job-summary" class="hint" style="margin:8px 0 12px"></div>
+          <div id="scraper-results"><div class="empty-state"><div class="icon">🧲</div><p>Jalankan scraper atau pilih job yang sudah ada.</p></div></div>
+        </div>
+      </div>
+
+      <div class="scraper-side">
+        <div class="section-card sticky-panel">
+          <div class="section-head">
+            <div>
+              <h3>🕒 Monitor Job</h3>
+              <div class="hint">Kontrol job berjalan dan lihat progresnya.</div>
+            </div>
+            <button class="btn-outline btn-sm" onclick="muatJobsScraper()" title="Refresh">🔄</button>
+          </div>
+
+          <!-- Kontrol job — tampil sesuai status job aktif -->
+          <div id="scraper-job-controls" style="display:none;margin-bottom:12px">
+            <div style="font-size:11px;color:#888;margin-bottom:6px">Job aktif: <span id="scraper-job-nama-aktif" style="font-weight:600;color:#1e2a3a"></span></div>
+            <div style="display:flex;gap:6px">
+              <button id="btn-job-pause" class="btn-outline btn-sm" style="flex:1" onclick="pauseJobScraper()">⏸️ Pause</button>
+              <button id="btn-job-resume" class="btn-success btn-sm" style="flex:1" onclick="resumeJobScraper()">▶️ Resume</button>
+              <button id="btn-job-stop" class="btn-danger btn-sm" style="flex:1" onclick="stopJobScraper()">⏹️ Stop</button>
+              <button id="btn-job-retry-failed" class="btn-outline btn-sm" style="flex:1" onclick="retryFailedJobScraper()">🔁 Retry Failed</button>
+            </div>
+          </div>
+          <div id="scraper-jobs"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-head">
+            <div>
+              <h3>🧾 Detail Keyword Run</h3>
+              <div class="hint">Status tiap keyword di dalam job terpilih.</div>
+            </div>
+          </div>
+          <div id="scraper-keyword-runs"><div class="empty-state"><div class="icon">🧷</div><p>Pilih job untuk melihat detail per keyword.</p></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DRAFT -->  <!-- DRAFT -->
   <div id="tab-draft" class="tab" style="display:none">
     <h2>📝 Draft Pesan</h2>
+    <div class="page-grid page-grid-2-1">
     <div class="section-card">
       <h3>➕ Buat Draft Baru</h3>
       <div class="form-group">
@@ -130,6 +466,7 @@
         Klik <strong>"Jadikan Aktif"</strong> pada draft — pesan itu otomatis dipakai di tab
         <strong>Kirim</strong>, <strong>Antrian</strong>, dan <strong>Broadcast</strong>.
       </p>
+    </div>
     </div>
     <h3 style="margin-bottom:12px">📂 Draft Tersimpan</h3>
     <div id="list-draft"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
@@ -187,45 +524,66 @@
   <!-- BROADCAST -->
   <div id="tab-broadcast" class="tab" style="display:none">
     <h2>📡 Broadcast ke Banyak Grup</h2>
+    <div id="broadcast-throttle-info" style="margin-bottom:12px"></div>
+    <div style="margin-bottom:12px">
+      <button class="btn-outline btn-sm" onclick="resetBroadcastThrottle()">⚡ Reset Throttle Kirim</button>
+    </div>
     <div id="broadcast-form-panel">
+
+      <!-- Pesan & Jeda -->
       <div class="section-card">
-        <h3>👤 Akun Pengirim (Rotasi Otomatis)</h3>
-        <div id="broadcast-akun-info"><div class="loading"><span class="spinner"></span></div></div>
-      </div>
-      <div class="section-card">
-        <h3>⚙️ Pengaturan</h3>
-        <div class="form-group">
-          <label>Jeda antar pengiriman (detik)</label>
-          <input id="broadcast-jeda" type="number" value="30" min="1" style="max-width:120px">
-          <span style="font-size:12px;color:#888;margin-top:4px">Rekomendasi: 20-60 detik</span>
+        <h3>✉️ Pesan & Pengaturan</h3>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label>Jeda antar kirim (detik)</label>
+            <input id="broadcast-jeda" type="number" value="30" min="5" style="max-width:120px">
+            <span style="font-size:12px;color:#888;margin-top:4px">Rekomendasi: 20–60 detik</span>
+          </div>
+          <div class="form-group">
+            <label>Draft aktif</label>
+            <div id="indikator-pesan-broadcast" style="font-size:12px;color:#888">Tidak ada draft aktif</div>
+          </div>
         </div>
         <div class="form-group">
-          <label>Isi Pesan</label>
-          <div id="indikator-pesan-broadcast"></div>
-          <textarea id="broadcast-pesan" rows="5" placeholder="Tulis pesan..."></textarea>
+          <label>Isi Pesan <span style="font-weight:400;color:#888;font-size:12px">(wajib diisi)</span></label>
+          <textarea id="broadcast-pesan" rows="5" placeholder="Tulis pesan broadcast di sini..."></textarea>
         </div>
       </div>
+
+      <!-- Pilih Grup per Akun -->
       <div class="section-card">
-        <h3>👥 Pilih Grup Tujuan</h3>
-        <div id="broadcast-grup-list"><div class="loading"><span class="spinner"></span></div></div>
-        <div style="margin-top:12px">
-          <button class="btn-outline btn-sm" onclick="muatListGrupBroadcast()">🔄 Refresh</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 style="margin:0">👥 Pilih Grup Tujuan</h3>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span id="jumlah-dipilih-broadcast" style="font-size:13px;color:#2563eb;font-weight:600">0 dipilih</span>
+            <button class="btn-outline btn-sm" onclick="muatInfoAkunBroadcast()">🔄 Refresh</button>
+          </div>
         </div>
+        <div style="font-size:12px;color:#888;margin-bottom:12px">
+          Grup ditampilkan per akun. Centang grup yang ingin dikirim. Setiap akun akan mengirim ke grup pilihannya masing-masing secara paralel.
+        </div>
+        <div id="broadcast-akun-info"><div class="loading"><span class="spinner"></span> Memuat akun dan grup...</div></div>
       </div>
-      <div style="margin-bottom:20px">
+
+      <!-- Tombol Mulai -->
+      <div style="margin-bottom:20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
         <button class="btn-success" onclick="mulaiBroadcast()" style="padding:14px 32px;font-size:15px;font-weight:700">
           📡 Mulai Broadcast
         </button>
+        <button class="btn-outline" onclick="pilihSemuaGrupBroadcast(true)">✅ Pilih Semua</button>
+        <button class="btn-outline" onclick="pilihSemuaGrupBroadcast(false)">☐ Batal Semua</button>
       </div>
       <div id="broadcast-status-msg" class="pesan-status"></div>
     </div>
+
+    <!-- Panel Progress -->
     <div id="broadcast-progress-panel" style="display:none">
       <div class="section-card">
-        <h3>📊 Progress</h3>
+        <h3>📊 Progress Broadcast</h3>
         <div id="broadcast-progress-info"></div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button class="btn-danger" onclick="stopBroadcast()">⏹️ Stop</button>
-          <button class="btn-outline" onclick="kembaliKeForm()">← Baru</button>
+          <button class="btn-outline" onclick="kembaliKeForm()">← Broadcast Baru</button>
         </div>
       </div>
       <div class="section-card">
@@ -233,10 +591,14 @@
         <div id="broadcast-log"></div>
       </div>
     </div>
+
+    <!-- Riwayat -->
     <div class="section-card">
-      <h3>🕐 Riwayat Sesi</h3>
-      <button class="btn-outline btn-sm" onclick="muatRiwayatBroadcast()" style="margin-bottom:12px">🔄 Refresh</button>
-      <div id="broadcast-riwayat"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0">🕐 Riwayat Sesi</h3>
+        <button class="btn-outline btn-sm" onclick="muatRiwayatBroadcast()">🔄 Refresh</button>
+      </div>
+      <div id="broadcast-riwayat"><div style="font-size:13px;color:#aaa">Belum ada riwayat.</div></div>
     </div>
   </div>
 
@@ -282,9 +644,705 @@
     <div id="list-riwayat"><div class="empty-state"><div class="icon">📈</div><p>Klik Refresh</p></div></div>
   </div>
 
+  <!-- PERMISSIONS -->
+  <div id="tab-permissions" class="tab" style="display:none">
+    <h2>🔐 Permissions Grup</h2>
+    <div id="permissions-summary-grid" class="ringkasan-grid" style="margin-bottom:20px"></div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <input id="permissions-search" placeholder="🔍 Cari grup..." style="flex:1;min-width:160px;max-width:280px">
+      <select id="permissions-filter-status">
+        <option value="">Semua status</option>
+        <option value="valid">Valid</option>
+        <option value="expired">Expired</option>
+        <option value="revoked">Revoked</option>
+        <option value="pending">Pending</option>
+      </select>
+      <button class="btn-outline btn-sm" onclick="muatPermissions()">🔄 Refresh</button>
+      <button class="btn-outline btn-sm" onclick="recheckExpiredPermissions()">⏱️ Recheck Expired</button>
+      <button class="btn-primary btn-sm" onclick="tampilFormTambahPermission()">➕ Tambah Permission</button>
+    </div>
+    <div id="form-tambah-permission" class="section-card" style="display:none;margin-bottom:16px">
+      <h3>➕ Tambah Permission Baru</h3>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label>ID Grup</label>
+          <input id="perm-group-id" type="number" placeholder="ID grup dari database">
+        </div>
+        <div class="form-group">
+          <label>Basis Permission</label>
+          <select id="perm-basis">
+            <option value="opt_in">Opt-In (grup minta sendiri)</option>
+            <option value="admin">Admin</option>
+            <option value="partner_approved">Partner Approved</option>
+            <option value="owned">Owned (akun kita di dalam)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Disetujui oleh</label>
+          <input id="perm-approved-by" placeholder="Nama/ID approver">
+        </div>
+        <div class="form-group">
+          <label>Berlaku sampai (opsional)</label>
+          <input id="perm-expires-at" type="datetime-local">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Catatan</label>
+        <textarea id="perm-notes" rows="2" placeholder="Opsional - catatan tambahan"></textarea>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn-success" onclick="simpanPermission()">💾 Simpan</button>
+        <button class="btn-outline" onclick="document.getElementById('form-tambah-permission').style.display='none'">Batal</button>
+      </div>
+      <div id="pesan-permission" class="pesan-status"></div>
+    </div>
+    <div id="list-permissions"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+    <div id="permissions-pagination" style="margin-top:12px;display:flex;gap:8px;align-items:center"></div>
+  </div>
+
+  <!-- ASSIGNMENTS -->
+  <div id="tab-assignments" class="tab" style="display:none">
+    <h2>🎯 Assignments Grup</h2>
+
+    <!-- Panel Auto Assign Toggle -->
+    <div class="section-card" style="margin-bottom:16px;border:2px solid #e5e7eb" id="auto-assign-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-weight:600;font-size:15px;margin-bottom:4px">⚡ Auto Assign Otomatis</div>
+          <div style="font-size:12px;color:#888" id="auto-assign-desc">
+            Kalau diaktifkan, sistem otomatis memilihkan akun untuk setiap grup baru setiap 60 detik — tanpa perlu klik manual.
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-shrink:0">
+          <span id="auto-assign-status-badge" style="font-size:12px;padding:4px 12px;border-radius:20px;background:#f1f5f9;color:#64748b;font-weight:600">
+            Mengecek...
+          </span>
+          <button id="btn-toggle-auto-assign" class="btn-outline"
+            style="min-width:120px;font-weight:700"
+            onclick="toggleAutoAssign()">
+            Memuat...
+          </button>
+        </div>
+      </div>
+      <div id="auto-assign-info" style="margin-top:10px;font-size:12px;color:#888;display:none">
+        ✅ Auto assign aktif — sistem akan menjalankan assignment otomatis setiap 60 detik untuk grup baru yang belum punya akun owner.
+      </div>
+    </div>
+
+    <div class="section-card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div>
+          <h3 style="margin:0 0 6px 0">🧠 Kriteria Auto Assign yang Dipakai</h3>
+          <div style="font-size:12px;color:#666">Cek logika kandidat di sini. Pengaturan utamanya sekarang ada di <strong>Pusat Kendali Otomasi → pop-up Auto Assign</strong>.</div>
+        </div>
+        <button class="btn-outline btn-sm" onclick="tampilTab('automation')">⚙️ Buka Auto Assign</button>
+      </div>
+      <div id="assignments-criteria-box" style="margin-top:12px;font-size:13px;color:#444">
+        <div class="loading"><span class="spinner"></span> Memuat kriteria auto assign...</div>
+      </div>
+    </div>
+
+    <!-- Summary + Filter -->
+    <div id="assignments-summary-grid" class="ringkasan-grid" style="margin-bottom:16px"></div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <input id="assignments-search" placeholder="🔍 Cari grup/akun..." style="flex:1;min-width:160px;max-width:280px"
+        oninput="muatAssignments()">
+      <select id="assignments-filter-status" onchange="muatAssignments()">
+        <option value="">Semua status</option>
+        <option value="assigned">Assigned</option>
+        <option value="failed">Failed</option>
+        <option value="retry_wait">Retry Wait</option>
+        <option value="released">Released</option>
+      </select>
+      <button class="btn-outline btn-sm" onclick="muatAssignments()">🔄 Refresh</button>
+      <button class="btn-success btn-sm" onclick="jalankanAutoAssign()">⚡ Run Sekali Sekarang</button>
+      <button class="btn-outline btn-sm" onclick="reassignFailed()">🔁 Reassign Failed</button>
+    </div>
+    <div id="list-assignments"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+    <div id="assignments-pagination" style="margin-top:12px;display:flex;gap:8px;align-items:center"></div>
+  </div>
+
+  <!-- CAMPAIGNS -->
+  <div id="tab-campaigns" class="tab" style="display:none">
+    <h2>📣 Campaign Manager</h2>
+    <div id="campaigns-summary-grid" class="ringkasan-grid" style="margin-bottom:20px"></div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <input id="campaigns-search" placeholder="🔍 Cari campaign..." style="flex:1;min-width:160px;max-width:280px">
+      <select id="campaigns-filter-status">
+        <option value="">Semua status</option>
+        <option value="draft">Draft</option>
+        <option value="queued">Queued</option>
+        <option value="running">Running</option>
+        <option value="paused">Paused</option>
+        <option value="stopped">Stopped</option>
+        <option value="done">Done</option>
+      </select>
+      <button class="btn-outline btn-sm" onclick="muatCampaigns()">🔄 Refresh</button>
+      <button class="btn-primary btn-sm" onclick="tampilFormCampaign()">➕ Buat Campaign</button>
+      <button class="btn-outline btn-sm" onclick="autoCreateCampaign()">🤖 Auto-Create</button>
+    </div>
+    <div id="form-buat-campaign" class="section-card" style="display:none;margin-bottom:16px">
+      <h3>➕ Buat Campaign Baru</h3>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label>Nama Campaign</label>
+          <input id="campaign-name" placeholder="Misal: Loker Medan April 2026">
+        </div>
+        <div class="form-group">
+          <label>Sender Pool</label>
+          <select id="campaign-sender-pool">
+            <option value="default">Default</option>
+            <option value="premium">Premium</option>
+            <option value="warmup">Warmup</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Syarat Status Permission Grup</label>
+          <select id="campaign-req-permission">
+            <option value="valid">Valid</option>
+            <option value="any">Any (lebih longgar)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Syarat Status Grup</label>
+          <select id="campaign-req-group">
+            <option value="managed">Managed</option>
+            <option value="active">Active</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group checkbox-group compact-check">
+        <label><input id="campaign-auto-start" type="checkbox"> Auto-start ketika target siap</label>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn-success" onclick="simpanCampaign()">💾 Simpan Campaign</button>
+        <button class="btn-outline" onclick="document.getElementById('form-buat-campaign').style.display='none'">Batal</button>
+      </div>
+      <div id="pesan-campaign" class="pesan-status"></div>
+    </div>
+    <div id="list-campaigns"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+    <div id="campaigns-pagination" style="margin-top:12px;display:flex;gap:8px;align-items:center"></div>
+
+    <h3 style="margin:24px 0 12px">📦 Broadcast Queue</h3>
+    <div id="broadcast-queue-summary" class="ringkasan-grid" style="margin-bottom:12px"></div>
+    <div id="broadcast-throttle-info" style="margin-bottom:12px"></div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn-outline btn-sm" onclick="muatBroadcastQueue()">🔄 Refresh Queue</button>
+      <button class="btn-success btn-sm" onclick="retryFailedQueue()">🔁 Retry Failed</button>
+      <button class="btn-danger btn-sm" onclick="resetStuckQueue()">⚡ Reset Stuck</button>
+      <button class="btn-outline btn-sm" onclick="pauseQueue()">⏸️ Pause Queue</button>
+      <button class="btn-outline btn-sm" onclick="resumeQueue()">▶️ Resume Queue</button>
+      <button class="btn-outline btn-sm" onclick="resetBroadcastThrottle()">⚡ Reset Throttle Kirim</button>
+    </div>
+    <div id="list-broadcast-queue"><div class="empty-state"><div class="icon">📦</div><p>Pilih campaign untuk melihat queue-nya.</p></div></div>
+  </div>
+
+  <!-- AUTOMATION RULES -->
+  <div id="tab-automation" class="tab" style="display:none">
+    <h2>🤖 Pusat Kendali Otomasi</h2>
+
+    <!-- Header: Aktifkan / Matikan Semua -->
+    <div class="section-card" style="margin-bottom:16px" id="automation-master-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-weight:700;font-size:15px;margin-bottom:4px">⚡ Mode Otomasi Penuh</div>
+          <div style="font-size:12px;color:#888">
+            Aktifkan semua → kamu hanya perlu scraper + keyword. Sisanya otomatis.
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button id="btn-aktifkan-semua" class="btn-success"
+            style="padding:10px 24px;font-weight:700" onclick="toggleSemuaOtomasi(true)">
+            ▶️ Aktifkan Semua
+          </button>
+          <button id="btn-matikan-semua" class="btn-danger"
+            style="padding:10px 24px;font-weight:700" onclick="toggleSemuaOtomasi(false)">
+            ⏹️ Matikan Semua
+          </button>
+          <button class="btn-outline btn-sm" onclick="muatStatusOtomasi()" title="Refresh status">🔄</button>
+        </div>
+      </div>
+
+      <!-- Checklist syarat -->
+      <div style="margin-top:14px;padding:10px 14px;background:#fffbeb;border-radius:8px;font-size:12px;line-height:2" id="automation-checklist">
+        <strong style="color:#92400e">📋 Syarat otomasi penuh:</strong><br>
+        <span id="chk-akun">⬜ Minimal 1 akun Telegram online</span><br>
+        <span id="chk-draft">⬜ Draft pesan aktif tersedia</span><br>
+        <span id="chk-scraper">⬜ Scraper pernah dijalankan</span>
+      </div>
+    </div>
+
+    <!-- 6 Engine Cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px;margin-bottom:20px" id="automation-engine-grid">
+
+      <!-- Card 1: Scraper -->
+      <div class="engine-card" id="card-scraper">
+        <div class="engine-card-header">
+          <div class="engine-card-icon">🧲</div>
+          <div class="engine-card-title">
+            <div class="engine-name">Scraper Grup</div>
+            <div class="engine-interval">Tab Scraper · manual</div>
+          </div>
+          <span class="engine-status-dot" id="dot-scraper" title="Status scraper"></span>
+        </div>
+        <div class="engine-stats" id="stats-scraper">
+          <div class="engine-stat"><span class="es-num" id="sc-jobs">-</span><span class="es-label">job total</span></div>
+          <div class="engine-stat green"><span class="es-num" id="sc-done">-</span><span class="es-label">selesai</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="sc-running">-</span><span class="es-label">berjalan</span></div>
+        </div>
+        <div class="engine-desc">Cari grup baru dari Telegram pakai keyword. Hasil masuk ke review.</div>
+        <div class="engine-actions">
+          <button class="btn-primary btn-sm" onclick="tampilTab('scraper')">🧲 Buka Scraper</button>
+        </div>
+      </div>
+
+      <!-- Card 2: Import (Auto) -->
+      <div class="engine-card" id="card-import">
+        <div class="engine-card-header">
+          <div class="engine-card-icon">📥</div>
+          <div class="engine-card-title">
+            <div class="engine-name">Auto Import</div>
+            <div class="engine-interval">Cek tiap 30 detik</div>
+          </div>
+          <span id="badge-import" class="badge-mesin off">Nonaktif</span>
+        </div>
+        <div class="engine-stats" id="stats-import">
+          <div class="engine-stat green"><span class="es-num" id="im-total">-</span><span class="es-label">grup di DB</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="im-belum">-</span><span class="es-label">belum diimpor</span></div>
+        </div>
+        <div class="engine-desc">Scraper selesai → hasil terbaik otomatis masuk database grup tanpa klik manual.</div>
+        <div class="engine-actions">
+          <button class="btn-outline btn-sm" onclick="toggleMesin('import')">⚡ Toggle</button>
+          <button class="btn-outline btn-sm" onclick="tampilTab('scraper')">👁️ Lihat Hasil</button>
+        </div>
+      </div>
+
+      <!-- Card 3: Permission (Auto) -->
+      <div class="engine-card" id="card-permission">
+        <div class="engine-card-header">
+          <div class="engine-card-icon">🔐</div>
+          <div class="engine-card-title">
+            <div class="engine-name">Auto Permission</div>
+            <div class="engine-interval">Ikut Auto Import</div>
+          </div>
+          <span id="badge-permission" class="badge-mesin off">Nonaktif</span>
+        </div>
+        <div class="engine-stats" id="stats-permission">
+          <div class="engine-stat green"><span class="es-num" id="pm-valid">-</span><span class="es-label">valid</span></div>
+          <div class="engine-stat red"><span class="es-num" id="pm-expired">-</span><span class="es-label">expired</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="pm-missing">-</span><span class="es-label">belum ada izin</span></div>
+        </div>
+        <div class="engine-error" id="err-permission" style="display:none"></div>
+        <div class="engine-desc">Grup baru masuk → izin opt-in langsung diberikan. Expired ditandai otomatis.</div>
+        <div class="engine-actions">
+          <button class="btn-outline btn-sm" onclick="tampilTab('permissions')">🔐 Kelola Izin</button>
+        </div>
+      </div>
+
+      <!-- Card 4: Assign (Auto) -->
+      <div class="engine-card" id="card-assign">
+        <div class="engine-card-header">
+          <div class="engine-card-icon">🎯</div>
+          <div class="engine-card-title">
+            <div class="engine-name">Auto Assign</div>
+            <div class="engine-interval">Cek tiap 60 detik</div>
+          </div>
+          <span id="badge-assign" class="badge-mesin off">Nonaktif</span>
+        </div>
+        <div class="engine-stats" id="stats-assign">
+          <div class="engine-stat green"><span class="es-num" id="as-assigned">-</span><span class="es-label">assigned</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="as-unassigned">-</span><span class="es-label">belum punya owner</span></div>
+          <div class="engine-stat red"><span class="es-num" id="as-failed">-</span><span class="es-label">gagal</span></div>
+        </div>
+        <div class="engine-error" id="err-assign" style="display:none"></div>
+        <div class="engine-desc">Grup punya izin → akun terbaik dipilih otomatis berdasarkan score & warming.</div>
+        <div class="engine-actions">
+          <button class="btn-outline btn-sm" onclick="toggleMesin('assign')">⚡ Toggle</button>
+          <button class="btn-outline btn-sm" onclick="tampilTab('assignments')">🎯 Kelola Assign</button>
+        </div>
+      </div>
+
+      <!-- Card 5: Broadcast (Auto) -->
+      <div class="engine-card" id="card-autojoin">
+        <div class="engine-card-header">
+          <div class="engine-card-icon">🔗</div>
+          <div class="engine-card-title">
+            <div class="engine-name">Auto Join</div>
+            <div class="engine-interval">Ikut Auto Assign · tiap 30 detik</div>
+          </div>
+          <span id="badge-autojoin" class="badge-mesin off">Nonaktif</span>
+        </div>
+        <div class="engine-stats" id="stats-autojoin">
+          <div class="engine-stat green"><span class="es-num" id="aj-joined">-</span><span class="es-label">berhasil join</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="aj-waiting">-</span><span class="es-label">menunggu</span></div>
+          <div class="engine-stat red"><span class="es-num" id="aj-failed">-</span><span class="es-label">gagal</span></div>
+        </div>
+        <div class="engine-error" id="err-autojoin" style="display:none"></div>
+        <div class="engine-desc">Akun otomatis join grup yang ditugaskan. Ikuti batas warming agar akun tidak kena restrict Telegram.</div>
+        <div class="engine-actions">
+          <button class="btn-outline btn-sm" onclick="toggleAutoJoin()">⚡ Toggle</button>
+          <button class="btn-outline btn-sm" onclick="tampilTab('automation')">⚙️ Detail & Pengaturan</button>
+        </div>
+      </div>
+
+      <!-- Card: Auto Broadcast -->
+      <div class="engine-card" id="card-campaign">
+        <div class="engine-card-header">
+          <div class="engine-card-icon">📡</div>
+          <div class="engine-card-title">
+            <div class="engine-name">Auto Broadcast</div>
+            <div class="engine-interval">Cek tiap 5 menit</div>
+          </div>
+          <span id="badge-campaign" class="badge-mesin off">Nonaktif</span>
+        </div>
+        <div class="engine-stats" id="stats-campaign">
+          <div class="engine-stat green"><span class="es-num" id="bc-running">-</span><span class="es-label">running</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="bc-queued">-</span><span class="es-label">queued</span></div>
+          <div class="engine-stat red"><span class="es-num" id="bc-failed">-</span><span class="es-label">failed</span></div>
+        </div>
+        <div class="engine-error" id="err-campaign" style="display:none"></div>
+        <div class="engine-desc">Pakai draft aktif → broadcast ke semua grup yang belum dikirim hari ini.</div>
+        <div class="engine-actions">
+          <button class="btn-outline btn-sm" onclick="toggleMesin('campaign')">⚡ Toggle</button>
+          <button class="btn-outline btn-sm" onclick="tampilTab('broadcast')">📡 Monitor</button>
+          <button class="btn-outline btn-sm" onclick="tampilTab('campaigns')">📣 Campaigns</button>
+        </div>
+      </div>
+
+      <!-- Card 6: Recovery -->
+      <div class="engine-card" id="card-recovery">
+        <div class="engine-card-header">
+          <div class="engine-card-icon">🛠️</div>
+          <div class="engine-card-title">
+            <div class="engine-name">Recovery</div>
+            <div class="engine-interval">Pantau semua engine</div>
+          </div>
+          <span class="engine-status-dot" id="dot-recovery" title="Status recovery"></span>
+        </div>
+        <div class="engine-stats" id="stats-recovery">
+          <div class="engine-stat red"><span class="es-num" id="rc-needed">-</span><span class="es-label">butuh recovery</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="rc-stuck-assign">-</span><span class="es-label">assign stuck</span></div>
+          <div class="engine-stat amber"><span class="es-num" id="rc-stuck-jobs">-</span><span class="es-label">job stuck</span></div>
+        </div>
+        <div class="engine-error" id="err-recovery" style="display:none"></div>
+        <div class="engine-desc">Menangkap entitas yang macet di engine manapun. Pulihkan dengan satu klik.</div>
+        <div class="engine-actions">
+          <button class="btn-outline btn-sm" onclick="tampilTab('recovery')">🛠️ Buka Recovery</button>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="automation-throttle-panel" style="margin-bottom:20px"></div>
+
+    <!-- Custom Rules Section -->
+    <div id="automation-summary-grid" class="ringkasan-grid" style="margin-bottom:16px"></div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <input id="automation-search" placeholder="🔍 Cari rule..." style="flex:1;min-width:160px;max-width:280px">
+      <select id="automation-filter-type">
+        <option value="">Semua tipe</option>
+        <option value="import">Import</option>
+        <option value="permission">Permission</option>
+        <option value="assignment">Assignment</option>
+        <option value="campaign_prepare">Campaign Prepare</option>
+        <option value="delivery">Delivery</option>
+        <option value="recovery_scan">Recovery Scan</option>
+        <option value="recovery_execute">Recovery Execute</option>
+      </select>
+      <select id="automation-filter-enabled">
+        <option value="">Semua</option>
+        <option value="1">Aktif</option>
+        <option value="0">Nonaktif</option>
+      </select>
+      <button class="btn-outline btn-sm" onclick="muatAutomation()">🔄 Refresh</button>
+      <button class="btn-primary btn-sm" onclick="tampilFormRule()">➕ Buat Rule</button>
+      <button class="btn-danger btn-sm" onclick="pauseSemuaRule()">⏸️ Matikan Semua Rule</button>
+    </div>
+    <div id="form-buat-rule" class="section-card" style="display:none;margin-bottom:16px">
+      <h3>➕ Buat Automation Rule</h3>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label>Nama Rule</label>
+          <input id="rule-name" placeholder="Misal: Auto assign grup baru">
+        </div>
+        <div class="form-group">
+          <label>Tipe Rule</label>
+          <select id="rule-type">
+            <option value="import">Import</option>
+            <option value="permission">Permission</option>
+            <option value="assignment">Assignment</option>
+            <option value="campaign_prepare">Campaign Prepare</option>
+            <option value="delivery">Delivery</option>
+            <option value="recovery_scan">Recovery Scan</option>
+            <option value="recovery_execute">Recovery Execute</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Prioritas (1=tertinggi)</label>
+          <input id="rule-priority" type="number" value="100" min="1">
+        </div>
+        <div class="form-group">
+          <label>Cooldown (detik)</label>
+          <input id="rule-cooldown" type="number" value="0" min="0">
+        </div>
+      </div>
+      <div class="form-group checkbox-group compact-check">
+        <label><input id="rule-enabled" type="checkbox" checked> Aktifkan rule ini</label>
+      </div>
+      <div class="rule-wizard-card">
+        <div class="visual-builder-header">
+          <div>
+            <h4>🪄 Wizard Rule Operasional</h4>
+            <p>Pilih template bahasa operasional atau tulis instruksi kerja Anda sendiri. Wizard akan mengisi visual builder secara otomatis.</p>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label>Template wizard</label>
+            <select id="rule-wizard-template"></select>
+          </div>
+          <div class="form-group rule-wizard-inline-actions">
+            <label>&nbsp;</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn-outline btn-sm" onclick="fillWizardFromTemplate('create')" type="button">📥 Muat Template</button>
+              <button class="btn-primary btn-sm" onclick="applyRuleWizard('create')" type="button">🪄 Terapkan ke Builder</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Instruksi operasional</label>
+          <textarea id="rule-wizard-text" rows="3" placeholder="Contoh: Jika ada grup valid yang belum punya owner, assign otomatis maksimal 100 per siklus dan utamakan owner yang sudah join."></textarea>
+          <div class="visual-builder-help">Wizard akan membaca kata kerja seperti impor, permission, assign, queue campaign, delivery, scan recovery, requeue, cooldown, retry, akun online, dan batas per siklus.</div>
+        </div>
+        <div id="rule-wizard-message" class="rule-wizard-message"></div>
+      </div>
+      <div class="visual-builder-header">
+        <div>
+          <h4>🧱 Visual Rule Builder</h4>
+          <p>Susun rule tanpa menulis JSON. Semua pilihan di bawah akan otomatis diubah menjadi Condition, Action, dan Scope yang valid.</p>
+        </div>
+        <button class="btn-outline btn-sm" onclick="toggleRuleAdvanced('create')" type="button">🧾 JSON Lanjutan</button>
+      </div>
+      <div id="rule-visual-builder-create" class="visual-rule-builder"></div>
+      <div id="rule-builder-unknown-create" class="rule-builder-note"></div>
+      <details id="rule-advanced-create" class="advanced-json-panel">
+        <summary>Buka mode lanjutan JSON</summary>
+        <div class="json-editor-grid">
+          <div class="form-group">
+            <label>Condition JSON</label>
+            <textarea id="rule-condition-json" data-builder-sync="create" class="json-textarea" oninput="_markJsonTouched('rule-condition-json')"></textarea>
+            <div class="json-actions"><button class="btn-outline btn-xs" onclick="formatJsonField('rule-condition-json');syncVisualBuilderFromJson('create')" type="button">Rapikan JSON</button></div>
+          </div>
+          <div class="form-group">
+            <label>Action JSON</label>
+            <textarea id="rule-action-json" data-builder-sync="create" class="json-textarea" oninput="_markJsonTouched('rule-action-json')"></textarea>
+            <div class="json-actions"><button class="btn-outline btn-xs" onclick="formatJsonField('rule-action-json');syncVisualBuilderFromJson('create')" type="button">Rapikan JSON</button></div>
+          </div>
+          <div class="form-group">
+            <label>Scope JSON</label>
+            <textarea id="rule-scope-json" data-builder-sync="create" class="json-textarea" oninput="_markJsonTouched('rule-scope-json')"></textarea>
+            <div class="json-actions"><button class="btn-outline btn-xs" onclick="formatJsonField('rule-scope-json');syncVisualBuilderFromJson('create')" type="button">Rapikan JSON</button></div>
+          </div>
+        </div>
+      </details>
+      <div id="rule-create-helper" class="rule-helper-box"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn-success" onclick="simpanRule()">💾 Simpan Rule</button>
+        <button class="btn-outline" onclick="isiTemplateRuleBaru()" type="button">🧬 Muat Default Stage</button>
+        <button class="btn-outline" onclick="document.getElementById('form-buat-rule').style.display='none'">Batal</button>
+      </div>
+      <div id="pesan-rule" class="pesan-status"></div>
+    </div>
+
+    <div id="rule-editor-card" class="section-card" style="display:none;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+        <div>
+          <h3 id="rule-editor-title">🧩 Edit Rule</h3>
+          <div id="rule-editor-summary" class="rule-editor-summary"></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-outline btn-sm" onclick="validateRuleEditor()" type="button">✅ Validasi JSON</button>
+          <button class="btn-outline btn-sm" onclick="resetRuleEditorDefaults()" type="button">🧬 Reset ke Default</button>
+          <button class="btn-outline btn-sm" onclick="testRuleEditor()" type="button">🧪 Test Rule</button>
+          <button class="btn-outline btn-sm" onclick="tutupEditorRule()" type="button">✖ Tutup</button>
+        </div>
+      </div>
+      <input id="editor-rule-id" type="hidden">
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label>Nama Rule</label>
+          <input id="editor-rule-name">
+        </div>
+        <div class="form-group">
+          <label>Tipe Rule</label>
+          <input id="editor-rule-type" readonly>
+        </div>
+        <div class="form-group">
+          <label>Prioritas (1=tertinggi)</label>
+          <input id="editor-rule-priority" type="number" min="1">
+        </div>
+        <div class="form-group">
+          <label>Cooldown (detik)</label>
+          <input id="editor-rule-cooldown" type="number" min="0">
+        </div>
+      </div>
+      <div class="form-group checkbox-group compact-check">
+        <label><input id="editor-rule-enabled" type="checkbox"> Rule aktif</label>
+      </div>
+      <div class="rule-wizard-card">
+        <div class="visual-builder-header">
+          <div>
+            <h4>🪄 Wizard Rule Operasional</h4>
+            <p>Gunakan bahasa operasional untuk mengubah rule yang sedang dibuka. Stage rule tetap mengikuti rule ini dan wizard akan menyesuaikan field-fieldnya.</p>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label>Template wizard</label>
+            <select id="editor-rule-wizard-template"></select>
+          </div>
+          <div class="form-group rule-wizard-inline-actions">
+            <label>&nbsp;</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn-outline btn-sm" onclick="fillWizardFromTemplate('editor')" type="button">📥 Muat Template</button>
+              <button class="btn-primary btn-sm" onclick="applyRuleWizard('editor')" type="button">🪄 Terapkan ke Builder</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Instruksi operasional</label>
+          <textarea id="editor-rule-wizard-text" rows="3" placeholder="Contoh: Jika target queued menunggu kirim dan minimal 2 akun online, kirim otomatis maksimal 20 target per siklus, wajib draft aktif, dan retry 15 menit."></textarea>
+          <div class="visual-builder-help">Untuk edit rule, wizard mengikuti stage rule yang sedang dibuka lalu mengisi field yang relevan secara otomatis.</div>
+        </div>
+        <div id="editor-rule-wizard-message" class="rule-wizard-message"></div>
+      </div>
+      <div class="visual-builder-header">
+        <div>
+          <h4>🧱 Visual Rule Builder</h4>
+          <p>Ubah rule dengan dropdown, checkbox, dan angka. JSON tetap tersedia hanya untuk kebutuhan lanjutan.</p>
+        </div>
+        <button class="btn-outline btn-sm" onclick="toggleRuleAdvanced('editor')" type="button">🧾 JSON Lanjutan</button>
+      </div>
+      <div id="rule-visual-builder-editor" class="visual-rule-builder"></div>
+      <div id="rule-builder-unknown-editor" class="rule-builder-note"></div>
+      <details id="rule-advanced-editor" class="advanced-json-panel">
+        <summary>Buka mode lanjutan JSON</summary>
+        <div class="json-editor-grid">
+          <div class="form-group">
+            <label>Condition JSON</label>
+            <textarea id="editor-condition-json" data-builder-sync="editor" class="json-textarea"></textarea>
+            <div class="json-actions"><button class="btn-outline btn-xs" onclick="formatJsonField('editor-condition-json');syncVisualBuilderFromJson('editor')" type="button">Rapikan JSON</button></div>
+          </div>
+          <div class="form-group">
+            <label>Action JSON</label>
+            <textarea id="editor-action-json" data-builder-sync="editor" class="json-textarea"></textarea>
+            <div class="json-actions"><button class="btn-outline btn-xs" onclick="formatJsonField('editor-action-json');syncVisualBuilderFromJson('editor')" type="button">Rapikan JSON</button></div>
+          </div>
+          <div class="form-group">
+            <label>Scope JSON</label>
+            <textarea id="editor-scope-json" data-builder-sync="editor" class="json-textarea"></textarea>
+            <div class="json-actions"><button class="btn-outline btn-xs" onclick="formatJsonField('editor-scope-json');syncVisualBuilderFromJson('editor')" type="button">Rapikan JSON</button></div>
+          </div>
+        </div>
+      </details>
+      <div id="rule-editor-helper" class="rule-helper-box"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn-success" onclick="simpanRuleEditor()" type="button">💾 Simpan Perubahan</button>
+        <button class="btn-outline" onclick="validateRuleEditor()" type="button">Cek Sebelum Simpan</button>
+      </div>
+      <div id="rule-editor-message" class="pesan-status"></div>
+    </div>
+
+    <div id="list-automation"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+  </div>
+
+  <!-- GROUP STATE DASHBOARD -->
+  <div id="tab-groupstates" class="tab" style="display:none">
+    <h2>🧭 Dashboard State Grup</h2>
+    <div class="section-card" style="margin-bottom:16px">
+      <div class="state-toolbar">
+        <input id="group-state-search" placeholder="🔍 Cari nama grup, username, owner, keyword, atau alasan hold..." style="flex:1;min-width:240px">
+        <select id="group-state-focus">
+          <option value="">Semua lane</option>
+          <option value="stabilization">Stabilization</option>
+          <option value="eligible">Eligible</option>
+          <option value="queued">Queued</option>
+          <option value="cooldown">Cooldown</option>
+          <option value="hold">Hold</option>
+          <option value="failed">Failed</option>
+          <option value="recovery">Recovery</option>
+        </select>
+        <select id="group-state-limit">
+          <option value="12">12 grup/lane</option>
+          <option value="20" selected>20 grup/lane</option>
+          <option value="40">40 grup/lane</option>
+          <option value="80">80 grup/lane</option>
+        </select>
+        <label class="inline-check"><input id="group-state-include-archived" type="checkbox"> Sertakan arsip</label>
+        <button class="btn-outline btn-sm" onclick="muatGroupStateDashboard()">🔄 Refresh</button>
+        <button class="btn-outline btn-sm" onclick="jalankanOrchestratorManual()">▶️ Run Orchestrator</button>
+        <button class="btn-outline btn-sm" onclick="jalankanScanRecovery()">🛠️ Scan Recovery</button>
+      </div>
+      <div id="group-state-bottlenecks" class="state-bottleneck-strip"></div>
+    </div>
+
+    <div id="group-state-summary" class="state-summary-grid" style="margin-bottom:16px"></div>
+
+    <div id="group-state-diagnostics" class="group-state-diagnostics" style="margin-bottom:16px"></div>
+
+    <div class="section-card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+        <div>
+          <h3 style="margin:0">📡 Sesi & Pipeline Aktif</h3>
+          <div class="hint">Ringkasan sesi campaign aktif dan indikator bottleneck antar tahap.</div>
+        </div>
+      </div>
+      <div id="group-state-session-strip" class="group-state-session-strip" style="margin-top:14px"></div>
+      <div id="group-state-flow-notes" class="group-state-flow-notes" style="margin-top:14px"></div>
+    </div>
+
+    <div id="group-state-board" class="group-state-board">
+      <div class="loading"><span class="spinner"></span> Memuat dashboard state grup...</div>
+    </div>
+  </div>
+
+  <!-- RECOVERY -->
+  <div id="tab-recovery" class="tab" style="display:none">
+    <h2>🛠️ Recovery Center</h2>
+    <div id="recovery-summary-grid" class="ringkasan-grid" style="margin-bottom:20px"></div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <select id="recovery-filter-type">
+        <option value="">Semua entitas</option>
+        <option value="account">Akun</option>
+        <option value="group">Grup</option>
+        <option value="assignment">Assignment</option>
+        <option value="campaign_target">Campaign Target</option>
+      </select>
+      <select id="recovery-filter-status">
+        <option value="">Semua status</option>
+        <option value="recoverable">Recoverable</option>
+        <option value="recovered">Recovered</option>
+        <option value="partial">Partial</option>
+        <option value="ignored">Ignored</option>
+        <option value="abandoned">Abandoned</option>
+      </select>
+      <button class="btn-outline btn-sm" onclick="muatRecovery()">🔄 Refresh</button>
+      <button class="btn-outline btn-sm" onclick="jalankanScanRecovery()">🔍 Scan</button>
+      <button class="btn-success btn-sm" onclick="recoverAllSafe()">✅ Recover All Safe</button>
+    </div>
+    <div id="list-recovery"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+    <div id="recovery-pagination" style="margin-top:12px;display:flex;gap:8px;align-items:center"></div>
+  </div>
+
+  <!-- DIAGNOSA -->
+  <div id="tab-diagnosa" class="tab" style="display:none">
+    <h2>🔬 Diagnosa Macet & Stuck</h2>
+    <div id="diagnosa-konten"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
+  </div>
+
   <!-- SETTINGS -->
   <div id="tab-settings" class="tab" style="display:none">
-    <h2>⚙️ Pengaturan Sistem</h2>
+    <h2>⚙️ Pengaturan Umum & Lanjutan</h2>
     <div id="settings-konten"><div class="loading"><span class="spinner"></span> Memuat...</div></div>
   </div>
 
@@ -295,6 +1353,14 @@
 <script src="settings.js"></script>
 <script src="analisis.js"></script>
 <script src="discovery.js"></script>
+<script src="scraper.js"></script>
 <script src="sync.js"></script>
+<script src="permissions.js"></script>
+<script src="assignments.js"></script>
+<script src="campaigns.js"></script>
+<script src="automation.js"></script>
+<script src="group_states.js"></script>
+<script src="recovery.js"></script>
+<script src="diagnosa.js"></script>
 </body>
 </html>

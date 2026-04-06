@@ -133,3 +133,9 @@ function resetKePesanAktif(textareaId) {
     }
     syncPesanAktif();
 }
+
+// muatTabDraft dipanggil sistem tab saat tab Draft dibuka
+async function muatTabDraft() {
+    await muatDraft();
+    await syncPesanAktif();
+}

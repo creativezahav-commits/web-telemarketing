@@ -1,80 +1,69 @@
-# 📱 Telegram HR Dashboard v2
+# Telegram Dashboard — Final Serious Baseline
 
-Dashboard untuk mengelola akun Telegram dan komunikasi grup secara manual dan terstruktur.
+Baseline kode ini adalah versi yang lebih matang untuk **uji operasional serius**:
+- struktur backend lama tetap dipertahankan agar tidak memutus flow yang sudah jalan
+- ditambahkan **API v2 modular** untuk dashboard-driven control
+- database tetap menjadi sumber data utama
+- route lama tetap ada untuk kompatibilitas frontend lama
 
-## Fitur v2
-- 👤 Monitor status akun (active / limited / banned)
-- 👥 Kelola status grup (active / failed / skip)
-- 📝 Draft pesan tersimpan (template reusable)
-- 📋 Antrian pengiriman (operator klik kirim satu per satu)
-- ✉️ Kirim pesan langsung
-- 📊 Riwayat & ringkasan pengiriman harian
+## Yang dipertahankan
+- `backend/app.py` sebagai entry point Flask
+- `services/account_manager.py` untuk login/session akun Telegram
+- `services/group_manager.py` untuk fetch grup dari akun
+- `services/message_service.py` untuk pengiriman satu target
+- `utils/database.py` dan `utils/storage_db.py` sebagai fondasi data
 
-## Cara Setup
+## Yang ditambahkan
+- `backend/routes/` untuk endpoint modular v2
+- `backend/services/overview_service.py` untuk ringkasan dashboard
+- `backend/utils/api.py` untuk response standar
+- kolom database tambahan untuk akun, grup, dan hasil scrape agar siap menuju dashboard-driven control
 
-### 1. Install library
+## Namespace API
+### Legacy API
+Masih aktif agar frontend lama tetap berjalan.
+
+### API v2
+Namespace baru ada di:
+- `/api/v2/overview/*`
+- `/api/v2/settings/*`
+- `/api/v2/accounts/*`
+- `/api/v2/scraper/*`
+- `/api/v2/groups/*`
+- `/api/v2/logs/*`
+
+Tujuannya adalah migrasi bertahap ke backend yang lebih terstruktur.
+
+## Setup
+
 ```bash
 pip install -r requirements.txt
-```
-
-### 2. Buat file .env
-```bash
-cp .env.example .env
-# Isi API_ID dan API_HASH dari https://my.telegram.org
-```
-
-### 3. Jalankan backend
-```bash
 cd backend
 python app.py
 ```
 
-### 4. Buka frontend
-Buka `frontend/index.html` di browser.
+## Catatan penting
+Versi ini saya anggap sebagai **baseline final yang matang untuk diuji serius**, tetapi belum boleh dianggap 100% production-hardened untuk skala besar tanpa pengujian runtime nyata pada akun, session, dan server yang akan kamu pakai.
 
-## Struktur Folder
-```
-tg-dashboard-v2/
-├── backend/
-│   ├── app.py
-│   ├── config.py
-│   ├── core/
-│   │   ├── account_status.py
-│   │   ├── group_status.py
-│   │   ├── message_queue.py
-│   │   └── send_history.py
-│   ├── services/
-│   │   ├── account_manager.py
-│   │   ├── group_manager.py
-│   │   └── message_service.py
-│   └── utils/
-│       ├── storage.py
-│       └── logger.py
-├── frontend/
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-├── .env.example
-├── .gitignore
-├── Procfile
-└── requirements.txt
+
+## Tambahan pada versi ini
+- route v2 baru untuk permissions, assignments, campaigns, automation rules, dan recovery
+- tabel database baru: group_permission, group_assignment, campaign, campaign_target, automation_rule, recovery_item, audit_log
+- dokumen implementasi: `IMPLEMENTATION_TASKS_BY_ENGINE.md`
+- catatan status paket: `FINAL_STATUS_AND_LIMITS.md`
+
+
+## Debug cepat
+Setelah perubahan kode, jalankan smoke test berikut dari folder project:
+
+```bash
+python backend/smoke_test.py
 ```
 
-## API Endpoints
+Smoke test ini mengecek endpoint inti backend, status pipeline, settings, permissions, assignments, campaigns, recovery, dan memastikan endpoint yang tidak ada mengembalikan **404 JSON** yang benar.
 
-| Method | Endpoint | Fungsi |
-|--------|----------|--------|
-| GET | /api/akun | Daftar akun |
-| POST | /api/akun/login | Login akun |
-| POST | /api/akun/status | Set status akun |
-| GET | /api/grup | Daftar grup |
-| POST | /api/grup/fetch | Fetch grup dari Telegram |
-| POST | /api/grup/status | Set status grup |
-| GET | /api/draft | Daftar draft |
-| POST | /api/draft | Simpan draft |
-| GET | /api/antrian | Daftar antrian |
-| POST | /api/antrian | Tambah antrian |
-| POST | /api/antrian/:id/kirim | Kirim dari antrian |
-| POST | /api/pesan/kirim | Kirim langsung |
-| GET | /api/riwayat | Riwayat hari ini |
-| GET | /api/riwayat/ringkasan | Ringkasan hari ini |
+## Endpoint untuk membaca alur otomasi
+- `GET /api/flow`
+- `GET /api/v2/overview/flow`
+
+Keduanya membantu melihat backlog per tahap: hasil scrape, grup tanpa permission, grup siap assign, grup managed, grup siap broadcast, dan item recovery.

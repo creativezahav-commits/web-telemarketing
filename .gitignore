@@ -1,7 +1,9 @@
-.env
-session/
-data/
+﻿backend/session/
+backend/data/*.db
+backend/.env
 __pycache__/
 *.pyc
 *.session
-*.db
+*.session-journal
+_backup_*/
+cek_sistem.py
