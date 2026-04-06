@@ -2034,6 +2034,287 @@ def _shuffle_putaran_broadcast(campaign_id: int):
     finally:
         conn.close()
 
+async def _kirim_satu_target(
+    phone: str,
+    row: dict,
+    draft_isi: str,
+    semaphore,
+    *,
+    blocked_terms: list,
+    retry_delay_minutes: int,
+    group_cooldown_hours: int,
+    group_cooldown_minutes: int,
+    requeue_sender_missing: bool,
+    max_attempts: int,
+    campaign_id: int,
+) -> dict:
+    """Kirim satu target broadcast oleh satu akun secara async."""
+    async with semaphore:
+        from services.account_manager import _clients
+        from services.message_service import kirim_pesan_manual
+        import asyncio as _asyncio_local
+
+        hasil = {'sent': 0, 'failed': 0, 'blocked': 0, 'skipped': 0}
+        target_id = int(row['id'])
+        group_id = int(row['group_id'])
+        group_name = str(row.get('group_name') or row.get('nama') or str(group_id))
+
+        try:
+            boleh, _ = _broadcast_boleh_kirim_sekarang(phone)
+            if not boleh:
+                hasil['skipped'] += 1
+                return hasil
+
+            quota = _send_quota_snapshot(phone)
+            if quota['limit'] > 0 and quota['remaining'] <= 0:
+                hasil['skipped'] += 1
+                return hasil
+
+            guard = evaluate_group_send_guard(row)
+            persist_group_send_guard(group_id, guard)
+            if not guard['send_eligible']:
+                skip_payload = json.dumps({
+                    'status': 'skipped',
+                    'reason': guard['send_guard_reason_code'],
+                    'detail': guard['send_guard_reason']
+                }, ensure_ascii=False)
+                update_queue_target(
+                    target_id, status='skipped',
+                    sender_account_id=phone,
+                    delivery_result=skip_payload,
+                    failure_reason=guard['send_guard_reason_code'],
+                    hold_reason=guard['send_guard_reason_code'],
+                    finalized_at=None,
+                    last_outcome_code='guard_skipped'
+                )
+                _mark_group_hold(group_id, guard['send_guard_status'],
+                                 guard['send_guard_reason_code'])
+                hasil['skipped'] += 1
+                return hasil
+
+            attempts = int(row.get('attempt_count') or 0)
+            update_queue_target(
+                target_id, status='sending',
+                sender_account_id=phone,
+                attempt_count=attempts + 1,
+                last_attempt_at=_now(),
+                reserved_at=_now(),
+            )
+
+            try:
+                result_send = await _asyncio_local.wait_for(
+                    kirim_pesan_manual(phone, group_id, draft_isi),
+                    timeout=60
+                )
+            except _asyncio_local.TimeoutError:
+                result_send = {'status': 'error', 'pesan': 'timeout'}
+            except Exception as exc:
+                result_send = {'status': 'error', 'pesan': str(exc)}
+
+            status = str(result_send.get('status') or '').lower()
+            payload = json.dumps(result_send, ensure_ascii=False)
+            message = str(result_send.get('pesan') or result_send.get('message') or '')
+            msg_lower = message.lower()
+
+            if status == 'berhasil':
+                update_queue_target(
+                    target_id, status='sent',
+                    sender_account_id=phone,
+                    delivery_result=payload,
+                    failure_reason=None,
+                    next_attempt_at=None,
+                    finalized_at=_now(),
+                    last_outcome_code='sent'
+                )
+                tandai_grup_masa_istirahat(
+                    group_id,
+                    cooldown_hours=group_cooldown_hours,
+                    cooldown_minutes=group_cooldown_minutes
+                )
+                jeda_menit = _hitung_jeda_broadcast(phone)
+                next_allowed = _now_plus(minutes=jeda_menit)
+                _set_broadcast_throttle(phone, _now(), next_allowed)
+                print(f'[Broadcast] OK {group_name} oleh {phone} — jeda {jeda_menit:.1f} menit')
+                hasil['sent'] += 1
+                return hasil
+
+            _AKUN_BANNED_SIGNALS = (
+                'authkeyunregistered', 'userdeactivated', 'phonenumberbanned',
+                'sessionrevoked', 'auth key unregistered', 'user deactivated',
+                'account suspended', 'account banned'
+            )
+            if any(x in msg_lower for x in _AKUN_BANNED_SIGNALS):
+                if tandai_akun_banned(phone):
+                    print(f'[Broadcast] {phone} DIBEKUKAN TELEGRAM')
+                _clients.pop(phone, None)
+                update_queue_target(
+                    target_id, status='queued',
+                    sender_account_id=None,
+                    delivery_result=payload,
+                    failure_reason=message,
+                    hold_reason='sender_account_banned',
+                    next_attempt_at=_now_plus(minutes=5),
+                    finalized_at=None,
+                    last_outcome_code='sender_account_banned'
+                )
+                _set_group_state(group_id, broadcast_status='queued',
+                                broadcast_hold_reason='sender_account_banned')
+                hasil['skipped'] += 1
+                return hasil
+
+            if 'flood' in msg_lower:
+                import re as _re
+                _fw = _re.search(r'(\d+)', message)
+                fw_detik = max(60, int(_fw.group(1)) if _fw else 60)
+                retry_at = _now_plus(seconds=fw_detik + 10)
+                update_queue_target(
+                    target_id, status='queued',
+                    sender_account_id=phone,
+                    delivery_result=payload,
+                    failure_reason=f'flood_wait_{fw_detik}s',
+                    hold_reason='flood_wait',
+                    next_attempt_at=retry_at,
+                    finalized_at=None,
+                    last_outcome_code='flood_wait'
+                )
+                _set_group_state(group_id, broadcast_status='queued',
+                                broadcast_hold_reason='flood_wait')
+                print(f'[Broadcast] FloodWait {fw_detik}s — {phone}')
+                hasil['skipped'] += 1
+                return hasil
+
+            blocked_reason_code = None
+            daily_limit_exhausted = (
+                'batas harian tercapai' in msg_lower or
+                'harian tercapai' in msg_lower
+            )
+            if 'chat_send_plain_forbidden' in msg_lower or 'write_forbidden' in msg_lower:
+                blocked_reason_code = 'send_forbidden'
+            elif 'topic_closed' in msg_lower:
+                blocked_reason_code = 'topic_closed'
+            elif any(term in msg_lower for term in blocked_terms):
+                blocked_reason_code = 'delivery_blocked'
+
+            if blocked_reason_code:
+                _attempt_count = int(row.get('broadcast_attempt_count') or 0)
+                _last_sender = str(row.get('broadcast_last_sender') or '')
+                _is_transient = (
+                    'flood' in msg_lower or 'timeout' in msg_lower or
+                    'batas harian' in msg_lower
+                )
+                if not _is_transient:
+                    _new_attempt = (
+                        1 if (_last_sender and _last_sender != phone)
+                        else _attempt_count + 1
+                    )
+                    _set_group_state(
+                        group_id,
+                        broadcast_attempt_count=_new_attempt,
+                        broadcast_last_sender=phone
+                    )
+                    if _new_attempt >= 2:
+                        print(f'[Broadcast] Percobaan ke-2 gagal — cek SpamBot {phone}...')
+                        status_spam = _cek_spambot_akun(phone)
+                        if status_spam == 'diblokir':
+                            from utils.storage_db import tandai_akun_restricted
+                            if tandai_akun_restricted(phone,
+                                'Terdeteksi diblokir setelah 2x gagal — SpamBot'):
+                                print(f'[Broadcast] {phone} dikeluarkan dari otomasi')
+                            _clients.pop(phone, None)
+                            try:
+                                _cleanup_banned_accounts(max_reassign=50)
+                            except Exception:
+                                pass
+                            update_queue_target(
+                                target_id, status='queued',
+                                sender_account_id=None,
+                                delivery_result=payload,
+                                failure_reason='sender_diblokir_spambot',
+                                hold_reason='sender_diblokir_spambot',
+                                next_attempt_at=_now_plus(minutes=10),
+                                finalized_at=None,
+                                last_outcome_code='sender_diblokir_spambot'
+                            )
+                            _set_group_state(
+                                group_id,
+                                broadcast_status='queued',
+                                broadcast_hold_reason='sender_diblokir_spambot',
+                                broadcast_attempt_count=0,
+                            )
+                            hasil['skipped'] += 1
+                        else:
+                            update_queue_target(
+                                target_id, status='blocked',
+                                sender_account_id=phone,
+                                delivery_result=payload,
+                                failure_reason=message,
+                                hold_reason='broadcast_blacklisted',
+                                finalized_at=_now(),
+                                last_outcome_code='blacklisted_max_attempt'
+                            )
+                            _set_group_state(
+                                group_id,
+                                broadcast_status='blocked',
+                                broadcast_hold_reason='broadcast_blacklisted_max_attempt',
+                                broadcast_attempt_count=0,
+                            )
+                            hasil['blocked'] += 1
+                        return hasil
+
+            if daily_limit_exhausted:
+                _mark_sender_delivery_exhausted(phone)
+                retry_at = _now_plus(minutes=5)
+                update_queue_target(
+                    target_id, status='queued',
+                    sender_account_id=phone,
+                    delivery_result=payload,
+                    failure_reason='daily_limit_exhausted',
+                    hold_reason='sender_daily_limit',
+                    next_attempt_at=retry_at,
+                    finalized_at=None,
+                    last_outcome_code='daily_limit_exhausted'
+                )
+                _set_group_state(group_id, broadcast_status='queued',
+                                broadcast_hold_reason='sender_daily_limit')
+                hasil['skipped'] += 1
+            else:
+                terminal_fail = attempts + 1 >= max_attempts
+                update_queue_target(
+                    target_id,
+                    status='failed' if terminal_fail else 'queued',
+                    sender_account_id=phone,
+                    delivery_result=payload,
+                    failure_reason=message or 'delivery_failed',
+                    next_attempt_at=None if terminal_fail else _now_plus(minutes=retry_delay_minutes),
+                    finalized_at=_now() if terminal_fail else None,
+                    last_outcome_code='delivery_failed'
+                )
+                if terminal_fail:
+                    _mark_group_hold(group_id, 'failed', 'delivery_failed')
+                else:
+                    _set_group_state(group_id, broadcast_status='queued',
+                                    broadcast_hold_reason='delivery_retry')
+                hasil['failed'] += 1
+
+        except Exception as exc:
+            print(f'[Broadcast] Error tak terduga target {target_id}: {exc}')
+            try:
+                update_queue_target(
+                    target_id, status='queued',
+                    sender_account_id=None,
+                    failure_reason=str(exc)[:200],
+                    hold_reason='unexpected_error',
+                    next_attempt_at=_now_plus(minutes=5),
+                    finalized_at=None,
+                    last_outcome_code='unexpected_error'
+                )
+            except Exception:
+                pass
+            hasil['failed'] += 1
+
+        return hasil
+
+
 def stage_delivery(limit: int | None = None) -> dict[str, Any]:
     plan = resolve_stage_rules('delivery')
     matched_rules = plan['matched_rules']
@@ -2189,328 +2470,94 @@ def stage_delivery(limit: int | None = None) -> dict[str, Any]:
     def _row_val(r, key, default=None):
         return _row_get(r, key, default)
 
-    processed = sent = failed = blocked = skipped = 0
-    sender_counts: dict[str, int] = defaultdict(int)
-    _log('info', 'delivery', 'stage_delivery_start', f'Delivery stage mulai: campaign={campaign_id}, candidates={len(rows)}, limit={limit}', entity_type='campaign', entity_id=str(campaign_id), result='running')
+    import asyncio as _asyncio
+    semaphore = _asyncio.Semaphore(10)
+
+    akun_siap = [
+        p for p in available_senders
+        if _broadcast_boleh_kirim_sekarang(p)[0]
+    ]
+
+    pasangan = []
+    akun_idx = 0
+    for row in rows:
+        if akun_idx >= len(akun_siap):
+            break
+        phone = akun_siap[akun_idx]
+        pasangan.append((phone, row))
+        akun_idx += 1
+
+    if not pasangan:
+        return {
+            'processed': 0, 'sent': 0, 'failed': 0,
+            'blocked': 0, 'skipped': 0,
+            'reason': 'tidak_ada_pasangan_akun_target',
+            'rule_ids': [r['id'] for r in matched_rules],
+            'context': plan['context']
+        }
+
+    _log('info', 'delivery', 'stage_delivery_start',
+         f'Delivery paralel: campaign={campaign_id}, akun_siap={len(akun_siap)}, pasangan={len(pasangan)}',
+         entity_type='campaign', entity_id=str(campaign_id), result='running')
+
     try:
-        for row in rows:
-            if processed >= limit:
-                break
-            target_id = int(row['id'])
-            preferred_sender = _row_val(row, 'sender_account_id') or _row_val(row, 'owner_phone')
-            resolved_sender, sender_candidates = _resolve_sender_for_group(int(row['group_id']), preferred_sender, require_online_sender=require_online_sender)
-            if resolved_sender and session_per_sender_limit > 0 and sender_counts[resolved_sender] >= session_per_sender_limit:
+        tasks = [
+            _kirim_satu_target(
+                phone, row, str(draft['isi']),
+                semaphore,
+                blocked_terms=blocked_terms,
+                retry_delay_minutes=retry_delay_minutes,
+                group_cooldown_hours=group_cooldown_hours,
+                group_cooldown_minutes=group_cooldown_minutes,
+                requeue_sender_missing=requeue_sender_missing,
+                max_attempts=max_attempts,
+                campaign_id=campaign_id,
+            )
+            for phone, row in pasangan
+        ]
+
+        from services.account_manager import _loop as _akun_loop
+        future = _asyncio.run_coroutine_threadsafe(
+            _asyncio.gather(*tasks, return_exceptions=True),
+            _akun_loop
+        )
+        results = future.result(timeout=120)
+
+        sent = failed = blocked = skipped = 0
+        for r in results:
+            if isinstance(r, Exception):
+                failed += 1
                 continue
-            processed += 1
-            attempts = int(_row_val(row, 'attempt_count') or 0)
-            row_dict = dict(row) if not isinstance(row, dict) else row
-            guard = evaluate_group_send_guard(row_dict, overrides=action)
-            persist_group_send_guard(int(_row_val(row, 'group_id')), guard)
-            if not guard['send_eligible']:
-                skip_payload = json.dumps({'status': 'skipped', 'reason': guard['send_guard_reason_code'], 'detail': guard['send_guard_reason']}, ensure_ascii=False)
-                update_queue_target(target_id, status='skipped', sender_account_id=resolved_sender or preferred_sender, delivery_result=skip_payload, failure_reason=guard['send_guard_reason_code'], hold_reason=guard['send_guard_reason_code'], finalized_at=None, last_outcome_code='guard_skipped')
-                _mark_group_hold(int(_row_val(row, 'group_id')), guard['send_guard_status'], guard['send_guard_reason_code'])
-                skipped += 1
-                _log('info', 'delivery', 'target_skipped_guard', f"Target {target_id} dilewati guard: {guard['send_guard_reason_code']}", entity_type='campaign_target', entity_id=str(target_id), result='skipped')
-                # Throttle aktif + skip karena guard → kuota tidak terbuang
-                # Kurangi processed agar limit tidak berkurang — cari pengganti di iterasi berikut
-                # Tapi batasi max skip berturut-turut agar tidak infinite loop
-                if throttle_enabled:
-                    processed = max(0, processed - 1)
-                    if skipped >= len(rows):
-                        # Semua kandidat di-skip guard → hentikan loop
-                        break
-                continue
-            if not resolved_sender:
-                next_attempt_at = _now_plus(minutes=retry_delay_minutes)
-                if requeue_sender_missing and attempts + 1 < max_attempts:
-                    update_queue_target(target_id, status='queued', sender_account_id=preferred_sender, attempt_count=attempts + 1, last_attempt_at=_now(), next_attempt_at=next_attempt_at, failure_reason='sender_missing', hold_reason='sender_missing', last_outcome_code='sender_missing')
-                    _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='queued', broadcast_hold_reason='sender_missing')
-                    _log('warning', 'delivery', 'sender_inactive', f'Target {target_id} diantrekan ulang karena sender tidak siap', entity_type='campaign_target', entity_id=str(target_id), result='queued')
-                else:
-                    update_queue_target(target_id, status='failed', sender_account_id=preferred_sender, attempt_count=attempts + 1, last_attempt_at=_now(), next_attempt_at=None, failure_reason='sender_missing', hold_reason='sender_missing', finalized_at=_now(), last_outcome_code='sender_missing')
-                    _mark_group_hold(int(_row_val(row, 'group_id')), 'failed', 'sender_missing')
-                    failed += 1
-                    _log('error', 'delivery', 'send_failed', f'Target {target_id} gagal final karena sender tidak siap', entity_type='campaign_target', entity_id=str(target_id), result='failed')
-                create_or_update_recovery_item('campaign', str(campaign_id), entity_name=_row_val(row, 'campaign_name'), current_status='failed', worker_status='degraded', problem_type='sender_missing', severity='medium', recovery_status='recoverable', last_activity_at=_now(), note=f'Target {target_id} tidak punya sender online yang layak')
-                continue
+            sent    += r.get('sent', 0)
+            failed  += r.get('failed', 0)
+            blocked += r.get('blocked', 0)
+            skipped += r.get('skipped', 0)
+        processed = len(pasangan)
 
-            sender_counts[resolved_sender] += 1
-            update_queue_target(target_id, status='sending', sender_account_id=resolved_sender, attempt_count=attempts + 1, last_attempt_at=_now(), reserved_at=_now(), session_key=str(_row_val(row, 'campaign_session_key') or _row_val(row, 'session_key') or ''), dispatch_slot=sender_counts[resolved_sender])
-            try:
-                _log('info', 'delivery', 'target_dispatch', f'Target {target_id} dikirim oleh {resolved_sender}', entity_type='campaign_target', entity_id=str(target_id), result='dispatching')
-                result_send = run_sync(kirim_pesan_manual(str(resolved_sender), int(_row_val(row, 'group_id')), str(draft['isi'])), timeout=180)
-            except Exception as exc:
-                result_send = {'status': 'error', 'pesan': str(exc)}
-            status = str(result_send.get('status') or '').lower()
-            payload = json.dumps(result_send, ensure_ascii=False)
-            message = str(result_send.get('pesan') or result_send.get('message') or '')
-            if status == 'berhasil':
-                update_queue_target(target_id, status='sent', sender_account_id=resolved_sender, delivery_result=payload, failure_reason=None, next_attempt_at=None, finalized_at=_now(), last_outcome_code='sent')
-                tandai_grup_masa_istirahat(int(_row_val(row, 'group_id')), cooldown_hours=group_cooldown_hours, cooldown_minutes=group_cooldown_minutes)
-                sent += 1
-                _log('info', 'delivery', 'send_success', f'Target {target_id} berhasil dikirim oleh {resolved_sender}', entity_type='campaign_target', entity_id=str(target_id), result='sent')
-                # Update throttle per akun — hitung next_allowed_at dari jeda otomatis akun ini
-                if throttle_enabled:
-                    jeda_menit = _hitung_jeda_broadcast(resolved_sender)
-                    next_allowed = _now_plus(minutes=jeda_menit)
-                    _set_broadcast_throttle(resolved_sender, _now(), next_allowed)
-                    print(f'[Broadcast] Terkirim ke {_row_val(row, "group_name")} oleh {resolved_sender} — jeda {jeda_menit:.1f} menit, next: {next_allowed[:16]}')
-            else:
-                msg_lower = message.lower()
-                blocked_reason_code = None
-                daily_limit_exhausted = 'batas harian tercapai' in msg_lower or 'harian tercapai' in msg_lower
-
-                _AKUN_BANNED_SIGNALS = ('authkeyunregistered','userdeactivated','phonenumberbanned','sessionrevoked','auth key unregistered','user deactivated','account suspended','account banned')
-                if any(x in msg_lower for x in _AKUN_BANNED_SIGNALS):
-                    if tandai_akun_banned(resolved_sender):
-                        print(f"[Broadcast] ⛔ {resolved_sender} DIBEKUKAN TELEGRAM — otomatis ditandai banned")
-                    _clients.pop(resolved_sender, None)
-                    update_queue_target(target_id, status='queued', sender_account_id=None, delivery_result=payload, failure_reason=message, hold_reason='sender_account_banned', next_attempt_at=_now_plus(minutes=5), finalized_at=None, last_outcome_code='sender_account_banned')
-                    _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='queued', broadcast_hold_reason='sender_account_banned')
-                    skipped += 1
-                    continue
-
-                # Deteksi FloodWait saat kirim
-                flood_wait = 'flood wait' in msg_lower or 'floodwait' in msg_lower
-                if flood_wait:
-                    import re as _re
-                    _fw_match = _re.search(r'(\d+)', message)
-                    fw_detik = int(_fw_match.group(1)) if _fw_match else 60
-                    fw_detik = max(60, fw_detik)
-                    retry_at = _now_plus(seconds=fw_detik + 10)
-                    update_queue_target(target_id, status='queued', sender_account_id=resolved_sender,
-                                      delivery_result=payload, failure_reason=f'flood_wait_{fw_detik}s',
-                                      hold_reason='flood_wait', next_attempt_at=retry_at, finalized_at=None,
-                                      last_outcome_code='flood_wait')
-                    _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='queued', broadcast_hold_reason='flood_wait')
-                    skipped += 1
-                    _log('warning', 'delivery', 'send_floodwait',
-                         f'FloodWait {fw_detik}s saat kirim ke {_row_val(row, "group_name")} oleh {resolved_sender}',
-                         entity_type='campaign_target', entity_id=str(target_id), result='queued')
-                    print(f'[Broadcast] ⏳ FloodWait {fw_detik}s — target ditunda')
-                    continue
-
-                if 'chat_send_plain_forbidden' in msg_lower or 'chat_write_forbidden' in msg_lower or 'write_forbidden' in msg_lower:
-                    blocked_reason_code = 'send_forbidden'
-                elif 'topic_closed' in msg_lower:
-                    blocked_reason_code = 'topic_closed'
-                elif any(term in msg_lower for term in blocked_terms):
-                    blocked_reason_code = 'delivery_blocked'
-
-                if blocked_reason_code:
-                    # Klasifikasi penyebab blocked
-                    akun_diblokir_di_grup = (
-                        'dibanned di grup' in msg_lower or
-                        'user banned' in msg_lower or
-                        'userbannedinchannel' in msg_lower or
-                        'you were kicked' in msg_lower
-                    )
-                    grup_sementara_restricted = blocked_reason_code in ('send_forbidden', 'topic_closed')
-                    izin_tidak_ada = 'tidak punya izin' in msg_lower or 'write_forbidden' in msg_lower
-
-                    # Cek apakah ada akun lain yang bisa kirim ke grup ini
-                    akun_lain_tersedia = len([
-                        c for c in sender_candidates
-                        if str(c.get('phone')) != resolved_sender
-                        and str(c.get('phone')) in _clients
-                    ]) > 0
-
-                    # === SISTEM 2x PERCOBAAN + BLACKLIST ===
-                    # Ambil riwayat percobaan — gunakan data dari row yang sudah di-fetch
-                    _attempt_count = int((row.get('broadcast_attempt_count') if hasattr(row, 'get') else 0) or 0)
-                    _last_sender = str((row.get('broadcast_last_sender') if hasattr(row, 'get') else '') or '')
-
-                    # Error yang tidak dihitung sebagai percobaan (bukan salah grup/akun)
-                    _is_transient_error = (
-                        'flood wait' in msg_lower or 'floodwait' in msg_lower or
-                        'timeout' in msg_lower or 'network' in msg_lower or
-                        'batas harian' in msg_lower or 'harian tercapai' in msg_lower or
-                        ('sender' in msg_lower and 'tidak tersedia' in msg_lower)
-                    )
-
-                    if not _is_transient_error:
-                        # Sender berganti dari sebelumnya%s Reset hitungan sender
-                        if _last_sender and _last_sender != resolved_sender:
-                            _new_attempt = 1
-                        else:
-                            _new_attempt = _attempt_count + 1
-
-                        # Update hitungan percobaan via _set_group_state (aman, tidak buka koneksi baru)
-                        _set_group_state(int(_row_val(row, 'group_id')),
-                                        broadcast_attempt_count=_new_attempt,
-                                        broadcast_last_sender=resolved_sender)
-
-                        # Percobaan ke-2 dengan akun yang sama → coba akun lain dulu
-                        if _new_attempt == 2 and akun_lain_tersedia:
-                            retry_at = _now_plus(hours=24)
-                            update_queue_target(target_id, status='queued', sender_account_id=None,
-                                              delivery_result=payload, failure_reason=message,
-                                              hold_reason='percobaan2_coba_akun_lain',
-                                              next_attempt_at=retry_at, finalized_at=None,
-                                              last_outcome_code='percobaan2_ganti_akun')
-                            failed += 1
-                            _log('warning', 'delivery', 'broadcast_ganti_akun',
-                                 f'Percobaan ke-2 gagal oleh {resolved_sender} di {_row_val(row, "group_name")} — coba akun lain',
-                                 entity_type='campaign_target', entity_id=str(target_id), result='retry')
-                            print(f'[Broadcast] ⚠️ Percobaan ke-2 gagal — cari akun lain untuk {_row_val(row, "group_name")}')
-                            continue
-
-                        # Percobaan ke-2 tanpa akun lain → cek SpamBot dulu
-                        if _new_attempt >= 2 and not akun_lain_tersedia:
-                            print(f'[Broadcast] Percobaan ke-2 gagal — cek SpamBot {resolved_sender}...')
-                            status_spam = _cek_spambot_akun(resolved_sender)
-
-                            if status_spam == 'diblokir':
-                                from utils.storage_db import tandai_akun_restricted
-                                from services.account_manager import _clients
-                                if tandai_akun_restricted(resolved_sender,
-                                    'Terdeteksi diblokir moderator setelah 2x gagal kirim — SpamBot'):
-                                    print(f'[Broadcast] ⛔ {resolved_sender} DIBLOKIR MODERATOR — dikeluarkan dari otomasi')
-                                _clients.pop(resolved_sender, None)
-
-                                try:
-                                    hasil_cleanup = _cleanup_banned_accounts(max_reassign=50)
-                                    print(f'[Broadcast] Cleanup: sender_reset={hasil_cleanup.get("sender_reset",0)}, '
-                                          f'managed_reset={hasil_cleanup.get("managed_reset",0)}, '
-                                          f'owner_reassigned={hasil_cleanup.get("owner_reassigned",0)}')
-                                except Exception as _ce:
-                                    print(f'[Broadcast] Cleanup gagal: {_ce}')
-
-                                update_queue_target(
-                                    target_id, status='queued',
-                                    sender_account_id=None,
-                                    delivery_result=payload,
-                                    failure_reason='sender_diblokir_spambot',
-                                    hold_reason='sender_diblokir_spambot',
-                                    next_attempt_at=_now_plus(minutes=10),
-                                    finalized_at=None,
-                                    last_outcome_code='sender_diblokir_spambot'
-                                )
-                                _set_group_state(
-                                    int(_row_val(row, 'group_id')),
-                                    broadcast_status='queued',
-                                    broadcast_hold_reason='sender_diblokir_spambot',
-                                    broadcast_attempt_count=0,
-                                )
-                                skipped += 1
-                                _log('warning', 'delivery', 'sender_diblokir_spambot',
-                                     f'{resolved_sender} dikeluarkan dari otomasi setelah SpamBot konfirmasi diblokir',
-                                     entity_type='campaign_target', entity_id=str(target_id), result='sender_removed')
-                            else:
-                                update_queue_target(
-                                    target_id, status='blocked',
-                                    sender_account_id=resolved_sender,
-                                    delivery_result=payload,
-                                    failure_reason=message,
-                                    hold_reason='broadcast_blacklisted',
-                                    finalized_at=_now(),
-                                    last_outcome_code='blacklisted_max_attempt'
-                                )
-                                _set_group_state(
-                                    int(_row_val(row, 'group_id')),
-                                    broadcast_status='blocked',
-                                    broadcast_hold_reason='broadcast_blacklisted_max_attempt',
-                                    broadcast_attempt_count=0,
-                                )
-                                blocked += 1
-                                _log('warning', 'delivery', 'broadcast_blacklisted',
-                                     f'Grup {_row_val(row, "group_name")} diblacklist — akun {resolved_sender} aman (SpamBot)',
-                                     entity_type='campaign_target', entity_id=str(target_id), result='blacklisted')
-                                print(f'[Broadcast] ⛔ BLACKLIST grup: {_row_val(row, "group_name")} (akun aman, grup bermasalah)')
-                            continue
-                    # === AKHIR SISTEM 2x PERCOBAAN ===
-
-                    if akun_diblokir_di_grup and akun_lain_tersedia:
-                        # Akun ini diblokir di grup tapi ada akun lain → coba akun lain
-                        retry_at = _now_plus(minutes=2)
-                        update_queue_target(target_id, status='queued', sender_account_id=None,
-                                          delivery_result=payload, failure_reason=message,
-                                          hold_reason='sender_banned_in_group',
-                                          next_attempt_at=retry_at, finalized_at=None,
-                                          last_outcome_code='sender_banned_in_group')
-                        _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='queued',
-                                        broadcast_hold_reason='sender_banned_in_group')
-                        failed += 1
-                        _log('warning', 'delivery', 'sender_banned_in_group',
-                             f'Akun {resolved_sender} diblokir di grup {_row_val(row, "group_name")} — coba akun lain',
-                             entity_type='campaign_target', entity_id=str(target_id), result='retry')
-                        print(f'[Broadcast] ⚠️ {resolved_sender} diblokir di grup — cari akun lain')
-
-                    elif akun_diblokir_di_grup and not akun_lain_tersedia:
-                        # Semua akun sudah dicoba / tidak ada akun lain → hold 6 jam lalu coba lagi
-                        hold_until = _now_plus(hours=6)
-                        update_queue_target(target_id, status='queued', sender_account_id=None,
-                                          delivery_result=payload, failure_reason=message,
-                                          hold_reason='all_senders_banned', next_attempt_at=hold_until,
-                                          finalized_at=None, last_outcome_code='all_senders_banned')
-                        _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='hold',
-                                        broadcast_hold_reason='all_senders_banned',
-                                        broadcast_ready_at=hold_until)
-                        blocked += 1
-                        _log('warning', 'delivery', 'all_senders_banned',
-                             f'Semua akun diblokir di grup {_row_val(row, "group_name")} — hold 6 jam',
-                             entity_type='campaign_target', entity_id=str(target_id), result='hold')
-                        print(f'[Broadcast] ⛔ Semua akun diblokir di grup — hold 6 jam')
-
-                    elif grup_sementara_restricted or izin_tidak_ada:
-                        # Grup sementara tidak bisa dikirim → hold 24 jam, coba lagi besok
-                        hold_until = _now_plus(hours=24)
-                        update_queue_target(target_id, status='queued', sender_account_id=resolved_sender,
-                                          delivery_result=payload, failure_reason=message,
-                                          hold_reason=blocked_reason_code, next_attempt_at=hold_until,
-                                          finalized_at=None, last_outcome_code=blocked_reason_code)
-                        _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='hold',
-                                        broadcast_hold_reason=blocked_reason_code,
-                                        broadcast_ready_at=hold_until)
-                        blocked += 1
-                        _log('warning', 'delivery', 'send_blocked',
-                             f'Grup {_row_val(row, "group_name")} restricted ({blocked_reason_code}) — hold 24 jam',
-                             entity_type='campaign_target', entity_id=str(target_id), result='hold')
-                        print(f'[Broadcast] ⛔ Grup restricted ({blocked_reason_code}) — hold 24 jam')
-
-                    else:
-                        # Blocked permanen — grup memang tidak bisa dikirim sama sekali
-                        update_queue_target(target_id, status='blocked', sender_account_id=resolved_sender,
-                                          delivery_result=payload, blocked_reason=message,
-                                          failure_reason=message, finalized_at=_now(),
-                                          hold_reason=blocked_reason_code, last_outcome_code=blocked_reason_code)
-                        _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='blocked',
-                                        broadcast_hold_reason=blocked_reason_code)
-                        blocked += 1
-                        _log('warning', 'delivery', 'send_blocked',
-                             f'Target {target_id} diblok final: {(message or blocked_reason_code)[:120]}',
-                             entity_type='campaign_target', entity_id=str(target_id), result='blocked')
-                        print(f'[Broadcast] 🚫 Grup diblok permanen: {blocked_reason_code}')
-                elif daily_limit_exhausted:
-                    _mark_sender_delivery_exhausted(str(resolved_sender))
-                    sender_counts[str(resolved_sender)] = max(sender_counts.get(str(resolved_sender), 0), session_per_sender_limit or 9999)
-                    retry_at = _now_plus(minutes=max(5, retry_delay_minutes))
-                    update_queue_target(target_id, status='queued', sender_account_id=resolved_sender, delivery_result=payload, failure_reason='daily_limit_exhausted', hold_reason='sender_daily_limit', next_attempt_at=retry_at, finalized_at=None, last_outcome_code='daily_limit_exhausted')
-                    _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='queued', broadcast_hold_reason='sender_daily_limit')
-                    skipped += 1
-                    _log('warning', 'delivery', 'sender_daily_limit', f'Target {target_id} ditunda karena sender {resolved_sender} mencapai batas harian', entity_type='campaign_target', entity_id=str(target_id), result='queued')
-                else:
-                    retry_at = _now_plus(minutes=retry_delay_minutes)
-                    terminal_fail = attempts + 1 >= max_attempts
-                    update_queue_target(target_id, status='failed' if terminal_fail else 'queued', sender_account_id=resolved_sender, delivery_result=payload, failure_reason=message or 'delivery_failed', next_attempt_at=None if terminal_fail else retry_at, finalized_at=_now() if terminal_fail else None, last_outcome_code='delivery_failed')
-                    if terminal_fail:
-                        _mark_group_hold(int(_row_val(row, 'group_id')), 'failed', 'delivery_failed')
-                    else:
-                        _set_group_state(int(_row_val(row, 'group_id')), broadcast_status='queued', broadcast_hold_reason='delivery_retry')
-                    failed += 1
-                    _log('warning' if not terminal_fail else 'error', 'delivery', 'send_failed', f'Target {target_id} gagal kirim: {(message or 'delivery_failed')[:120]}', entity_type='campaign_target', entity_id=str(target_id), result='retry' if not terminal_fail else 'failed')
-                    if not terminal_fail:
-                        create_or_update_recovery_item('campaign', str(campaign_id), entity_name=_row_val(row, 'campaign_name'), current_status='failed', worker_status='degraded', problem_type='delivery_failed', severity='medium', recovery_status='recoverable', last_activity_at=_now(), note=(message or 'delivery_failed')[:300])
         summary = _refresh_campaign_counts(campaign_id) or {}
-        result = {'campaign_id': campaign_id, 'session_key': _row_get(chosen_campaign, 'session_key'), 'processed': processed, 'sent': sent, 'failed': failed, 'blocked': blocked, 'skipped': skipped, 'campaign_summary': summary, 'rule_ids': [r['id'] for r in matched_rules], 'context': plan['context']}
+        result = {
+            'campaign_id': campaign_id,
+            'processed': processed,
+            'sent': sent, 'failed': failed,
+            'blocked': blocked, 'skipped': skipped,
+            'campaign_summary': summary,
+            'rule_ids': [r['id'] for r in matched_rules],
+            'context': plan['context']
+        }
         record_stage_result('delivery', matched_rules, True, result)
-        if sent or failed or blocked or skipped:
-            _log('info', 'orchestrator', 'stage_delivery', f'Delivery session #{campaign_id}: sent={sent}, failed={failed}, blocked={blocked}, skipped={skipped}', entity_type='campaign_target', entity_id='bulk', result='success')
+        if sent or failed or blocked:
+            _log('info', 'orchestrator', 'stage_delivery',
+                 f'Delivery paralel #{campaign_id}: sent={sent}, failed={failed}, blocked={blocked}, skipped={skipped}',
+                 entity_type='campaign_target', entity_id='bulk', result='success')
         return result
+
     except Exception as exc:
-        _log('error', 'delivery', 'stage_delivery_exception', f'Delivery exception: {type(exc).__name__}: {str(exc)[:180]}', entity_type='campaign', entity_id=str(campaign_id), result='failed')
-        record_stage_result('delivery', matched_rules, False, {'processed': processed, 'sent': sent, 'failed': failed, 'blocked': blocked, 'skipped': skipped, 'campaign_id': campaign_id, 'error': str(exc)[:200]})
+        _log('error', 'delivery', 'stage_delivery_exception',
+             f'Delivery exception: {type(exc).__name__}: {str(exc)[:180]}',
+             entity_type='campaign', entity_id=str(campaign_id), result='failed')
+        record_stage_result('delivery', matched_rules, False, {
+            'campaign_id': campaign_id, 'error': str(exc)[:200]
+        })
         raise
 
 
