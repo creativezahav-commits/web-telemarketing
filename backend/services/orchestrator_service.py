@@ -2604,6 +2604,57 @@ def scan_recovery_items(limit: int | None = None) -> dict[str, Any]:
                     note='Tidak ada kemajuan queue dalam ambang waktu recovery'
                 )
                 created['campaign'] += 1
+
+        if 'campaign' in watch_entities:
+            try:
+                conn_bg = get_conn()
+                stuck_grup = conn_bg.execute(
+                    """
+                    SELECT g.id, g.nama, g.broadcast_status,
+                           g.broadcast_hold_reason, g.broadcast_ready_at,
+                           g.diupdate
+                    FROM grup g
+                    WHERE g.assignment_status = 'managed'
+                      AND g.status = 'active'
+                      AND g.broadcast_status IN ('queued', 'hold')
+                      AND g.broadcast_hold_reason NOT IN (
+                          'sender_daily_limit', 'daily_limit_exhausted',
+                          'flood_wait', 'join_floodwait',
+                          'approval_pending', 'new_assignment_wait',
+                          'stabilization_wait', 'recovered_assignment_wait',
+                          'sender_diblokir_spambot'
+                      )
+                      AND (
+                          g.broadcast_ready_at IS NULL
+                          OR g.broadcast_ready_at <= TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+                      )
+                      AND g.diupdate IS NOT NULL
+                      AND g.diupdate <= TO_CHAR(
+                          NOW() - INTERVAL '60 minutes',
+                          'YYYY-MM-DD HH24:MI:SS'
+                      )
+                    LIMIT %s
+                    """,
+                    (limit,)
+                ).fetchall()
+                conn_bg.close()
+
+                for row in stuck_grup:
+                    create_or_update_recovery_item(
+                        'grup_broadcast', str(row['id']),
+                        entity_name=row['nama'] or str(row['id']),
+                        current_status=str(row['broadcast_status']),
+                        worker_status='degraded',
+                        problem_type='stuck_broadcast_queued',
+                        severity='medium',
+                        recovery_status='recoverable',
+                        last_activity_at=row['diupdate'],
+                        note=f"broadcast_hold_reason: {row['broadcast_hold_reason'] or '-'}"
+                    )
+                    created['campaign'] += 1
+            except Exception as _bg_exc:
+                print(f'[RecoveryScan] Gagal scan grup broadcast stuck: {_bg_exc}')
+
         total = sum(created.values())
         result = {'created': created, 'total': total, 'rule_ids': [r['id'] for r in matched_rules], 'context': plan['context']}
         record_stage_result('recovery_scan', matched_rules, True, result)
@@ -2633,7 +2684,7 @@ def execute_recovery_safe(limit: int | None = None) -> dict[str, Any]:
     assignment_delay_minutes = _rule_int(action, 'assignment_delay_minutes', 'assignment_broadcast_delay_minutes', 2)
     resume_on_restart = _setting_bool('recovery_resume_on_restart', True)
     mark_partial_if_worker_missing = _setting_bool('recovery_mark_partial_if_worker_missing', True)
-    allowed_entity_types = set(scope.get('entity_types') or ['scrape_job', 'assignment', 'campaign'])
+    allowed_entity_types = set(scope.get('entity_types') or ['scrape_job', 'assignment', 'campaign', 'grup_broadcast'])
     items, _ = get_recovery_items(status='recoverable', page=1, page_size=limit)
     recovered = 0
     partial = 0
@@ -2703,6 +2754,55 @@ def execute_recovery_safe(limit: int | None = None) -> dict[str, Any]:
                     _refresh_campaign_counts(int(entity_id))
                     create_or_update_recovery_item('campaign', entity_id, recovery_status='recovered', last_recovery_at=_now(), last_recovery_result='targets_requeued', recovery_attempt_count=int(item.get('recovery_attempt_count') or 0) + 1)
                     recovered += 1
+                elif entity_type == 'grup_broadcast':
+                    try:
+                        grup_id = int(entity_id)
+                        conn_gb = get_conn()
+                        row_gb = conn_gb.execute(
+                            """SELECT id, nama, broadcast_status, assignment_status
+                               FROM grup WHERE id=%s AND status='active'
+                               AND assignment_status='managed'""",
+                            (grup_id,)
+                        ).fetchone()
+                        conn_gb.close()
+
+                        if not row_gb:
+                            create_or_update_recovery_item(
+                                'grup_broadcast', entity_id,
+                                recovery_status='ignored',
+                                last_recovery_result='grup_tidak_ditemukan_atau_bukan_managed'
+                            )
+                            partial += 1
+                            continue
+
+                        _set_group_state(
+                            grup_id,
+                            broadcast_status='broadcast_eligible',
+                            broadcast_hold_reason=None,
+                            broadcast_ready_at=None,
+                        )
+                        create_or_update_recovery_item(
+                            'grup_broadcast', entity_id,
+                            recovery_status='recovered',
+                            last_recovery_at=_now(),
+                            last_recovery_result='broadcast_status_direset_ke_eligible',
+                            recovery_attempt_count=int(
+                                item.get('recovery_attempt_count') or 0
+                            ) + 1
+                        )
+                        recovered += 1
+                        print(f"[Recovery] Grup '{row_gb['nama']}' broadcast direset ke eligible")
+                    except Exception as _gb_exc:
+                        create_or_update_recovery_item(
+                            'grup_broadcast', entity_id,
+                            recovery_status='partial',
+                            last_recovery_at=_now(),
+                            last_recovery_result=str(_gb_exc)[:200],
+                            recovery_attempt_count=int(
+                                item.get('recovery_attempt_count') or 0
+                            ) + 1
+                        )
+                        partial += 1
                 else:
                     create_or_update_recovery_item(entity_type, entity_id, recovery_status='ignored', last_recovery_result='unsupported_entity')
                     partial += 1
@@ -2751,6 +2851,50 @@ def run_full_cycle(trigger: str = 'manual') -> dict[str, Any]:
                 print(f'[Orchestrator] Auto-reset {n_reset} target queued yang sudah waktunya')
         except Exception as _ar_exc:
             print(f'[Orchestrator] Gagal auto-reset queued: {_ar_exc}')
+
+        try:
+            conn_sr = get_conn()
+            n_sending = conn_sr.execute(
+                """UPDATE campaign_target
+                   SET status='queued',
+                       hold_reason='reset_dari_sending_stuck',
+                       next_attempt_at=NULL,
+                       sender_account_id=NULL
+                   WHERE status='sending'
+                     AND last_attempt_at IS NOT NULL
+                     AND last_attempt_at <= TO_CHAR(
+                         NOW() - INTERVAL '10 minutes',
+                         'YYYY-MM-DD HH24:MI:SS'
+                     )"""
+            ).rowcount
+            conn_sr.commit()
+            conn_sr.close()
+            if n_sending > 0:
+                print(f'[Orchestrator] Reset {n_sending} target stuck di sending > 10 menit')
+        except Exception as _sr_exc:
+            print(f'[Orchestrator] Gagal reset sending stuck: {_sr_exc}')
+
+        try:
+            conn_sd = get_conn()
+            n_spambot = conn_sd.execute(
+                """UPDATE campaign_target
+                   SET status='queued',
+                       hold_reason=NULL,
+                       sender_account_id=NULL,
+                       next_attempt_at=NULL
+                   WHERE status='queued'
+                     AND hold_reason='sender_diblokir_spambot'
+                     AND last_attempt_at <= TO_CHAR(
+                         NOW() - INTERVAL '10 minutes',
+                         'YYYY-MM-DD HH24:MI:SS'
+                     )"""
+            ).rowcount
+            conn_sd.commit()
+            conn_sd.close()
+            if n_spambot > 0:
+                print(f'[Orchestrator] Reset {n_spambot} target dari akun yang diblokir SpamBot')
+        except Exception as _sd_exc:
+            print(f'[Orchestrator] Gagal reset spambot target: {_sd_exc}')
 
         try:
             _cleanup_banned_accounts(max_reassign=20)
