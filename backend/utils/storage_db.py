@@ -389,7 +389,9 @@ def resolve_broadcast_cooldown(cooldown_hours: int | None = None, cooldown_minut
     except Exception:
         hours = 0
     if minutes <= 0 and hours <= 0:
-        minutes = 1
+        # Fallback: baca setting utama (default 24 jam)
+        hours = max(1, int(_get_int('broadcast_cooldown_grup_jam',
+                    _get_int('campaign_group_cooldown_hours', 24)) or 24))
     if minutes > 0:
         modifier = f'+{minutes} minutes'
         ready_at = datetime.now() + timedelta(minutes=minutes)

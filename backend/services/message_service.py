@@ -17,7 +17,6 @@ from services.account_manager import get_client
 from utils.settings_manager import get_int as get_setting_int
 from utils.storage_db import (
     catat_riwayat,
-    tandai_grup_masa_istirahat,
     update_last_kirim_grup,
     set_broadcast_throttle,   # ✅ BARU
 )
@@ -83,14 +82,6 @@ async def kirim_pesan_manual(phone: str, grup_id: int, pesan: str) -> dict:
         catat_riwayat(phone, grup_id, nama_grup, "send_success")
         update_last_kirim_grup(grup_id)
 
-        cooldown_minutes = get_setting_int('broadcast_cooldown_grup_menit',
-                           get_setting_int('campaign_group_cooldown_minutes', 0))
-        cooldown_hours   = get_setting_int('broadcast_cooldown_grup_jam',
-                           get_setting_int('campaign_group_cooldown_hours', 0))
-        tandai_grup_masa_istirahat(grup_id,
-                                   cooldown_hours=cooldown_hours,
-                                   cooldown_minutes=cooldown_minutes)
-        catat_riwayat(phone, grup_id, nama_grup, 'cooldown_started')
 
         # ✅ BARU: catat throttle broadcast per-akun setelah kirim sukses
         jeda_next = max(1, random.uniform(1, get_jeda_kirim(phone)))
