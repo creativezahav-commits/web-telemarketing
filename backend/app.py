@@ -340,9 +340,9 @@ def _safe_startup():
     # [6] Reset setting kritis yang menyebabkan grup stuck di stabilization
     # Nilai lama di DB akan di-override ke nilai cepat & aman
     try:
-        from utils.settings_manager import set as _ss
-        # Profil cepat & sederhana untuk pengguna awam
-        quick_settings = {
+        from utils.settings_manager import get as _gs, set as _ss
+        # Kategori 1: selalu override (setting sistem kritis)
+        always_override = {
             "assignment_broadcast_delay_minutes": "0",
             "broadcast_masa_tunggu_setelah_assign_menit": "0",
             "campaign_managed_required": "0",
@@ -352,6 +352,14 @@ def _safe_startup():
             "campaign_skip_inactive_groups_enabled": "0",
             "broadcast_tahan_grup_sepi": "0",
             "assignment_min_health_score": "0",
+            "orchestrator_interval_seconds": "10",
+            "pipeline_interval_detik": "10",
+        }
+        for _k, _v in always_override.items():
+            _ss(_k, _v)
+
+        # Kategori 2: hanya isi kalau belum ada — user bebas ubah dari UI
+        default_only = {
             "campaign_session_target_limit": "200",
             "broadcast_target_per_sesi": "200",
             "campaign_session_per_sender_limit": "20",
@@ -366,8 +374,6 @@ def _safe_startup():
             "broadcast_cooldown_grup_menit": "1",
             "campaign_retry_delay_minutes": "1",
             "broadcast_retry_delay_detik": "60",
-            "orchestrator_interval_seconds": "10",
-            "pipeline_interval_detik": "10",
             "orchestrator_import_batch": "200",
             "orchestrator_permission_batch": "200",
             "orchestrator_assign_batch": "150",
@@ -384,16 +390,24 @@ def _safe_startup():
             "auto_join_reserve_quota": "0",
             "w1_maks_join": "20",
             "w1_maks_kirim": "20",
-            "w1_jeda_join": "5",
+            "w1_jeda_join": "3600",
             "w1_jeda_kirim": "5",
-            "w2_maks_join": "25",
+            "w2_maks_join": "10",
             "w2_maks_kirim": "25",
-            "w2_jeda_join": "5",
+            "w2_jeda_join": "1800",
             "w2_jeda_kirim": "5",
+            "w3_maks_join": "20",
+            "w3_jeda_join": "600",
+            "w4_maks_join": "30",
+            "w4_jeda_join": "300",
         }
-        for _k, _v in quick_settings.items():
-            _ss(_k, _v)
-        print("Startup: setting kritis di-reset ke mode cepat & sinkron")
+        diisi = 0
+        for _k, _v in default_only.items():
+            existing = _gs(_k, None)
+            if existing is None or str(existing).strip() == '':
+                _ss(_k, _v)
+                diisi += 1
+        print(f"Startup: setting kritis di-reset, {diisi} default baru diisi")
     except Exception as e:
         print(f"Startup: gagal reset setting ({e})")
 

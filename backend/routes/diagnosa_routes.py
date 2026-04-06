@@ -125,7 +125,7 @@ def diagnosa():
         SELECT
             ct.id, ct.campaign_id, ct.group_id,
             g.nama AS nama_grup, g.username,
-            ct.assigned_account_id AS akun,
+            ct.sender_account_id AS akun,
             ct.status, ct.hold_reason,
             ct.attempt_count, ct.last_attempt_at,
             CASE
@@ -243,7 +243,7 @@ def diagnosa_grup(grup_id: int):
 
     # Campaign targets
     targets = conn.execute("""
-        SELECT ct.id, ct.campaign_id, ct.assigned_account_id, ct.status,
+        SELECT ct.id, ct.campaign_id, ct.sender_account_id, ct.status,
                ct.hold_reason, ct.attempt_count, ct.last_attempt_at
         FROM campaign_target ct WHERE ct.group_id=%s
         ORDER BY ct.id DESC LIMIT 20

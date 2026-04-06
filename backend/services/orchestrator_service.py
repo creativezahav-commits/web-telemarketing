@@ -799,6 +799,111 @@ def stage_permission(limit: int | None = None) -> dict[str, Any]:
         record_stage_result('permission', matched_rules, False, {'processed': processed, 'created': created})
         raise
 
+def _heal_abandoned_groups(limit: int = 50) -> dict:
+    """
+    Self-healing untuk grup terbengkalai karena owner tidak aktif.
+    """
+    result = {
+        'ready_assign_cleaned': 0,
+        'assigned_reset': 0,
+    }
+    STATUS_TIDAK_AKTIF = ('banned', 'restricted', 'suspended', 'session_expired')
+
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            """
+            SELECT g.id, g.nama, g.owner_phone
+            FROM grup g
+            WHERE g.assignment_status = 'ready_assign'
+              AND g.owner_phone IS NOT NULL
+              AND g.status = 'active'
+              AND g.owner_phone IN (
+                  SELECT phone FROM akun
+                  WHERE COALESCE(status,'active') IN ('banned','restricted',
+                        'suspended','session_expired')
+              )
+            LIMIT %s
+            """,
+            (limit,)
+        ).fetchall()
+        conn.close()
+
+        for row in rows:
+            try:
+                conn2 = get_conn()
+                conn2.execute(
+                    """UPDATE grup SET owner_phone = NULL
+                       WHERE id = %s AND assignment_status = 'ready_assign'""",
+                    (int(row['id']),)
+                )
+                conn2.commit()
+                conn2.close()
+                result['ready_assign_cleaned'] += 1
+                print(f"[SelfHeal] Grup '{row['nama']}' — owner lama {row['owner_phone']} dibersihkan")
+            except Exception as e:
+                print(f"[SelfHeal] Gagal bersihkan grup {row['id']}: {e}")
+    except Exception as e:
+        print(f"[SelfHeal] Gagal cek kondisi 1: {e}")
+
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            """
+            SELECT g.id, g.nama, g.owner_phone, g.diupdate
+            FROM grup g
+            WHERE g.assignment_status = 'assigned'
+              AND g.owner_phone IS NOT NULL
+              AND g.status = 'active'
+              AND g.owner_phone IN (
+                  SELECT phone FROM akun
+                  WHERE COALESCE(status,'active') IN ('banned','restricted',
+                        'suspended','session_expired')
+              )
+              AND (
+                  g.diupdate IS NULL
+                  OR g.diupdate <= TO_CHAR(
+                      NOW() - INTERVAL '60 minutes',
+                      'YYYY-MM-DD HH24:MI:SS'
+                  )
+              )
+            LIMIT %s
+            """,
+            (limit,)
+        ).fetchall()
+        conn.close()
+
+        for row in rows:
+            try:
+                _set_group_state(
+                    int(row['id']),
+                    owner_phone=None,
+                    assignment_status='ready_assign',
+                    broadcast_status='hold',
+                    broadcast_hold_reason='owner_tidak_aktif_reset',
+                )
+                latest = _latest_assignment_for_group(int(row['id']))
+                if latest and latest.get('id'):
+                    update_assignment(
+                        int(latest['id']),
+                        status='failed',
+                        failure_reason='owner_tidak_aktif',
+                        last_attempt_at=_now(),
+                    )
+                result['assigned_reset'] += 1
+                print(f"[SelfHeal] Grup '{row['nama']}' — assigned ke {row['owner_phone']} (tidak aktif), reset ke ready_assign")
+            except Exception as e:
+                print(f"[SelfHeal] Gagal reset grup {row['id']}: {e}")
+    except Exception as e:
+        print(f"[SelfHeal] Gagal cek kondisi 2: {e}")
+
+    total = result['ready_assign_cleaned'] + result['assigned_reset']
+    if total > 0:
+        print(f"[SelfHeal] Selesai: {result['ready_assign_cleaned']} dibersihkan, {result['assigned_reset']} di-reset")
+
+    return result
+
+
 def _cleanup_banned_accounts(max_reassign: int = 20) -> dict:
     result = {
         'sender_reset': 0,
@@ -1090,177 +1195,133 @@ def stage_sync_join(limit: int = 500) -> dict[str, Any]:
 
 def stage_auto_join(limit: int = 30) -> dict[str, Any]:
     """
-    Auto Join Grup — akun otomatis join grup yang belum diikuti.
+    Auto Join Grup — desain per-akun, non-blocking.
 
-    Cara kerja:
-    1. Cari grup 'assigned' yang owner_phone-nya belum join (tidak ada di akun_grup)
-    2. Grup harus punya username (public) agar bisa di-join langsung
-    3. Cek kuota join harian akun (dari warming level)
-    4. Kalau lolos semua → akun join grup dengan jeda aman
-    5. Catat hasil ke riwayat
+    Loop berdasarkan AKUN aktif. Setiap akun maksimal join 1 grup per siklus.
+    Jeda antar-join murni dikontrol lewat next_join_at di DB.
     """
     from services.account_manager import _clients, _loop, run_sync
-    from core.warming import get_batas_join, get_jeda_join, get_daily_capacity
-    from utils.storage_db import (
-        hitung_join_hari_ini, catat_riwayat,
-        sinkronkan_relasi_akun_grup, simpan_relasi_akun_grup
-    )
+    from utils.storage_db import catat_riwayat, simpan_relasi_akun_grup
 
-    # Cek apakah fitur auto join diaktifkan
     if not _setting_bool('auto_join_enabled', False):
         return {'skipped': True, 'reason': 'auto_join_enabled=0'}
 
     if not _clients:
         return {'skipped': True, 'reason': 'Tidak ada akun online'}
 
-    max_per_siklus   = _setting_int('auto_join_max_per_cycle', 1)
-    sisakan_kuota    = _setting_int('auto_join_reserve_quota', 2)
-    hanya_public     = _setting_bool('auto_join_public_only', True)
+    sisakan_kuota = _setting_int('auto_join_reserve_quota', 2)
+    hanya_public  = _setting_bool('auto_join_public_only', True)
 
     joined_total  = 0
     skipped_total = 0
     failed_total  = 0
-    now = _now()
 
-    # Batas join per siklus berdasarkan level warming akun
-    def _max_join_per_siklus(phone: str) -> int:
-        try:
-            conn_wm = get_conn()
-            row_wm = conn_wm.execute("SELECT level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
-            conn_wm.close()
-            level = int(row_wm["level_warming"] or 1) if row_wm else 1
-        except Exception:
-            level = 1
-        if level <= 2:
-            return 1   # Level 1-2: sangat konservatif
-        elif level == 3:
-            return 2   # Level 3: mulai normal
-        else:
-            return min(max_per_siklus, 3)  # Level 4+: ikut setting
+    # Ambil semua akun aktif yang sedang online (di _clients)
+    phones_online = list(_clients.keys())
+    conn_ak = get_conn()
+    akun_aktif: list[str] = []
+    for ph in phones_online:
+        row_ak = conn_ak.execute(
+            "SELECT status, auto_send_enabled FROM akun WHERE phone=%s", (ph,)
+        ).fetchone()
+        if not row_ak:
+            continue
+        st = str(row_ak['status'] or '').lower()
+        aus = int(row_ak['auto_send_enabled'] or 1)
+        if st in ('banned', 'restricted', 'suspended'):
+            continue
+        if st not in ('active', 'online'):
+            continue
+        if aus == 0:
+            continue
+        akun_aktif.append(ph)
+    conn_ak.close()
 
-    # Ambil grup yang perlu di-join: assigned, punya owner, punya username
-    # Tambahan penting:
-    # - grup blocked final tidak boleh ikut lagi
-    # - grup floodwait ditahan sampai join_ready_at lewat
-    # - target invalid final dibuang permanen dari antrean
-    conn = get_conn()
-    where = [
-        "g.assignment_status = 'assigned'",
-        "g.owner_phone IS NOT NULL",
-        "g.status = 'active'",
-        "COALESCE(g.broadcast_status,'hold') != 'blocked'",
-        "COALESCE(g.join_hold_reason,'') != 'invalid_target_final'",
-        "(g.join_ready_at IS NULL OR g.join_ready_at <= TO_CHAR(NOW(),'YYYY-MM-DD HH24:MI:SS'))",
-    ]
-    if hanya_public:
-        where.append("g.username IS NOT NULL AND g.username != ''")
+    if not akun_aktif:
+        return {'joined': 0, 'skipped': 0, 'failed': 0, 'reason': 'Tidak ada akun aktif'}
 
-    rows = conn.execute(
-        f"""
-        SELECT g.id, g.nama, g.username, g.owner_phone, g.join_ready_at, g.join_hold_reason,
-               COALESCE(g.broadcast_status,'hold') AS broadcast_status,
-               COALESCE(g.join_attempt_count, 0) AS join_attempt_count
-        FROM grup g
-        WHERE {' AND '.join(where)}
-          AND NOT EXISTS (
-            SELECT 1 FROM akun_grup ag
-            WHERE ag.phone = g.owner_phone AND ag.grup_id = g.id
-          )
-        ORDER BY g.score DESC, g.id DESC
-        LIMIT %s
-        """,
-        (limit,)
-    ).fetchall()
-    conn.close()
-
-    if not rows:
-        return {'joined': 0, 'skipped': 0, 'failed': 0, 'reason': 'Tidak ada grup yang perlu di-join'}
-
-    # Tracking berapa kali join per akun di siklus ini
-    join_count_siklus: dict[str, int] = {}
-
-    for row in rows:
-        group_id    = int(row['id'])
-        group_name  = row['nama'] or str(group_id)
-        username    = row['username']
-        owner_phone = row['owner_phone']
-
-        try:
-            _conn_ban = get_conn()
-            _row_ban = _conn_ban.execute("SELECT status, auto_send_enabled FROM akun WHERE phone=%s", (owner_phone,)).fetchone()
-            _conn_ban.close()
-            if _row_ban:
-                _akun_status = str(_row_ban['status'] or '').lower()
-                _auto_send = int(_row_ban['auto_send_enabled'] or 1)
-                # Skip akun banned, restricted, atau yang auto_send dimatikan
-                if _akun_status in ('banned', 'restricted', 'suspended') or _auto_send == 0:
-                    skipped_total += 1
-                    continue
-        except Exception:
-            pass
-
-        # Cek akun online
-        client = _clients.get(owner_phone)
-        if not client:
-            reassigned, _best = _reassign_group_owner_for_join(group_id, group_name, owner_phone, reason_code='owner_offline', reserve_quota=sisakan_kuota)
-            print(f"[AutoJoin] {owner_phone} tidak online, {'owner dipindahkan' if reassigned else 'skip'} grup '{group_name}'")
+    # Loop per akun — tiap akun independen
+    for phone in akun_aktif:
+        owner_phone = phone
+        # 1) Throttle per akun lewat next_join_at
+        boleh_join, _alasan = _join_boleh_sekarang(owner_phone)
+        if not boleh_join:
             skipped_total += 1
             continue
 
-        # Cek batas per siklus (disesuaikan level warming akun)
-        sudah_siklus = join_count_siklus.get(owner_phone, 0)
-        batas_siklus_akun = _max_join_per_siklus(owner_phone)
-        if sudah_siklus >= batas_siklus_akun:
-            skipped_total += 1
-            continue
-
-        # Cek kuota harian
+        # 2) Kuota harian
         quota_owner = _join_quota_snapshot(owner_phone)
         batas_harian = int(quota_owner.get('limit') or 0)
         sudah_hari   = int(quota_owner.get('used') or 0)
         sisa_hari    = int(quota_owner.get('remaining') or 0)
         if batas_harian > 0 and (sudah_hari + sisakan_kuota >= batas_harian or sisa_hari <= sisakan_kuota):
-            reassigned, best = _reassign_group_owner_for_join(group_id, group_name, owner_phone, reason_code='owner_join_quota_exhausted', reserve_quota=sisakan_kuota)
-            if reassigned and best:
-                print(f"[AutoJoin] {owner_phone} kuota join owner penuh ({sudah_hari}/{batas_harian}, sisa {sisa_hari}), owner dipindahkan ke {best['account_id']} untuk grup '{group_name}'")
-            else:
-                print(f"[AutoJoin] {owner_phone} kuota join owner penuh ({sudah_hari}/{batas_harian}, sisa {sisa_hari}), skip")
             skipped_total += 1
             continue
 
-        # Cek throttle join per akun
-        boleh_join, alasan_join = _join_boleh_sekarang(owner_phone)
-        if not boleh_join:
+        client = _clients.get(owner_phone)
+        if not client:
             skipped_total += 1
             continue
 
-        # Join grup
+        # 3) Cari 1 grup untuk akun ini
+        where = [
+            "g.assignment_status = 'assigned'",
+            "g.owner_phone = %s",
+            "g.status = 'active'",
+            "COALESCE(g.broadcast_status,'hold') != 'blocked'",
+            "COALESCE(g.join_hold_reason,'') != 'invalid_target_final'",
+            "(g.join_ready_at IS NULL OR g.join_ready_at <= TO_CHAR(NOW(),'YYYY-MM-DD HH24:MI:SS'))",
+        ]
+        if hanya_public:
+            where.append("g.username IS NOT NULL AND g.username != ''")
+
+        conn = get_conn()
+        row = conn.execute(
+            f"""
+            SELECT g.id, g.nama, g.username, g.owner_phone, g.join_ready_at, g.join_hold_reason,
+                   COALESCE(g.broadcast_status,'hold') AS broadcast_status,
+                   COALESCE(g.join_attempt_count, 0) AS join_attempt_count
+            FROM grup g
+            WHERE {' AND '.join(where)}
+              AND NOT EXISTS (
+                SELECT 1 FROM akun_grup ag
+                WHERE ag.phone = g.owner_phone AND ag.grup_id = g.id
+              )
+            ORDER BY g.score DESC, g.id DESC
+            LIMIT 1
+            """,
+            (owner_phone,)
+        ).fetchone()
+        conn.close()
+
+        if not row:
+            skipped_total += 1
+            continue
+
+        group_id   = int(row['id'])
+        group_name = row['nama'] or str(group_id)
+        username   = row['username']
+
+        # 4) Join grup (non-blocking; jeda lewat next_join_at)
         try:
             jeda_detik = _hitung_jeda_join(owner_phone)
 
             async def _do_join(c, uname):
                 from telethon.tl.functions.channels import JoinChannelRequest
-                from telethon.tl.functions.messages import ImportChatInviteRequest
                 entity = await c.get_entity(uname)
                 await c(JoinChannelRequest(entity))
                 return entity.id
 
-            real_id = run_sync(_do_join(client, username), timeout=30)
-            print(f"[AutoJoin] ✅ {owner_phone} berhasil join '{group_name}' (@{username})")
-            _log('info', 'join', 'join_success', f"{owner_phone} berhasil join {group_name}", entity_type='group', entity_id=str(group_id), result='success', payload=json.dumps({'phone': owner_phone, 'username': username, 'owner_used_for_join': owner_phone, 'owner_before': row['owner_phone'], 'owner_after': owner_phone}, ensure_ascii=False))
+            run_sync(_do_join(client, username), timeout=30)
+            print(f"[AutoJoin] OK {owner_phone} join '{group_name}' (@{username})")
+            _log('info', 'join', 'join_success', f"{owner_phone} berhasil join {group_name}", entity_type='group', entity_id=str(group_id), result='success', payload=json.dumps({'phone': owner_phone, 'username': username}, ensure_ascii=False))
 
-            # Catat ke riwayat dan akun_grup
             catat_riwayat(owner_phone, group_id, group_name, 'join_success')
             simpan_relasi_akun_grup(owner_phone, [group_id])
-            _set_group_state(group_id, join_ready_at=None, join_hold_reason=None, join_status='joined', join_attempt_count=0)
+            _set_group_state(group_id, join_ready_at=None, join_hold_reason=None, join_status='joined', join_attempt_count=0, assignment_status='managed')
 
-            join_count_siklus[owner_phone] = sudah_siklus + 1
             joined_total += 1
             _set_join_throttle(owner_phone, jeda_detik)
-
-            # Jeda aman sesuai warming level
-            import time as _t
-            _t.sleep(jeda_detik)
 
         except Exception as e:
             err = str(e)
@@ -1308,15 +1369,15 @@ def stage_auto_join(limit: int = 30) -> dict[str, Any]:
                     pass
                 _set_group_state(group_id, join_hold_reason='join_floodwait', join_ready_at=hold_until, join_status='hold')
                 catat_riwayat(owner_phone, group_id, group_name, 'join_floodwait', err[:150])
+                _set_join_throttle(owner_phone, detik + 30)
                 failed_total += 1
                 continue
 
             # Kalau sudah member → update relasi saja
             if 'already' in err_lower or 'useralreadyparticipant' in err_lower:
                 simpan_relasi_akun_grup(owner_phone, [group_id])
-                _set_group_state(group_id, join_ready_at=None, join_hold_reason=None, join_status='joined', join_attempt_count=0)
+                _set_group_state(group_id, join_ready_at=None, join_hold_reason=None, join_status='joined', join_attempt_count=0, assignment_status='managed')
                 joined_total += 1
-                join_count_siklus[owner_phone] = sudah_siklus + 1
                 print(f"[AutoJoin] {owner_phone} sudah member '{group_name}', relasi diperbarui")
                 catat_riwayat(owner_phone, group_id, group_name, 'join_success', 'already participant')
                 continue
@@ -1373,8 +1434,6 @@ def stage_auto_join(limit: int = 30) -> dict[str, Any]:
                 catat_riwayat(owner_phone, group_id, group_name, 'join_failed', f'Percobaan {attempt_count}/2: {err[:150]}')
                 print(f"[AutoJoin] Grup '{group_name}' gagal join percobaan {attempt_count}/2 — ulangi 5 menit lagi")
 
-            import time as _t2
-            _t2.sleep(5)
             failed_total += 1
 
     result = {'joined': joined_total, 'skipped': skipped_total, 'failed': failed_total}
@@ -1833,20 +1892,62 @@ def _broadcast_boleh_kirim_sekarang(phone: str) -> tuple[bool, str]:
     return True, 'ok'
 
 def _hitung_jeda_join(phone: str) -> int:
-    """Hitung jeda (detik) antar join berdasarkan level warming akun."""
+    """
+    Hitung jeda join secara ACAK berbasis sisa kuota hari ini.
+
+    Prinsip:
+    - Jeda = sisa waktu hari ini ÷ sisa kuota yang belum dipakai
+    - Ditambah faktor acak ±20% agar tidak terlihat robotic
+    - Dibatasi antara min dan max per level warming
+    """
+    import random as _random
+    from datetime import datetime as _dtt, timedelta as _td
+
     try:
         conn_wm = get_conn()
-        row_wm = conn_wm.execute("SELECT level_warming FROM akun WHERE phone=%s", (phone,)).fetchone()
+        row_wm = conn_wm.execute(
+            "SELECT level_warming FROM akun WHERE phone=%s", (phone,)
+        ).fetchone()
         conn_wm.close()
         level = int(row_wm["level_warming"] or 1) if row_wm else 1
     except Exception:
         level = 1
-    if level <= 1:
-        return _setting_int('w1_jeda_join', 60)
-    elif level == 2:
-        return _setting_int('w2_jeda_join', 45)
-    else:
-        return _setting_int('w3_jeda_join', 30)
+
+    BATAS = {
+        1: {'min': 1800, 'max': 14400},
+        2: {'min': 900,  'max': 7200},
+        3: {'min': 300,  'max': 5400},
+        4: {'min': 120,  'max': 3600},
+    }
+    batas = BATAS.get(level, BATAS[4])
+
+    try:
+        quota = _join_quota_snapshot(phone)
+        sisa_kuota = max(1, int(quota.get('remaining') or 1))
+        batas_harian = int(quota.get('limit') or 0)
+    except Exception:
+        sisa_kuota = 1
+        batas_harian = 0
+
+    if batas_harian <= 0:
+        jeda = batas['min']
+        faktor = _random.uniform(0.8, 1.2)
+        return max(batas['min'], min(batas['max'], int(jeda * faktor)))
+
+    sekarang = _dtt.now()
+    tengah_malam = (sekarang + _td(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    sisa_detik = max(300, int((tengah_malam - sekarang).total_seconds()))
+
+    jeda_ideal = sisa_detik / sisa_kuota
+
+    faktor = _random.uniform(0.8, 1.2)
+    jeda_final = int(jeda_ideal * faktor)
+
+    jeda_final = max(batas['min'], min(batas['max'], jeda_final))
+
+    return jeda_final
 
 
 def _join_boleh_sekarang(phone: str) -> tuple[bool, str]:
@@ -2565,6 +2666,11 @@ def run_full_cycle(trigger: str = 'manual') -> dict[str, Any]:
             _cleanup_banned_accounts(max_reassign=20)
         except Exception as _cb_exc:
             print(f'[Orchestrator] Gagal cleanup banned: {_cb_exc}')
+
+        try:
+            _heal_abandoned_groups(limit=50)
+        except Exception as _sh_exc:
+            print(f'[Orchestrator] Gagal self-heal: {_sh_exc}')
 
         stages = [
             ('import',          'auto_import_enabled',   stage_import),

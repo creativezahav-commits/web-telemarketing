@@ -243,6 +243,8 @@ def _reset_stuck_targets_otomatis():
             """UPDATE broadcast_throttle_akun
                SET next_allowed_at=NULL, last_broadcast_at=NULL"""
         )
+        # 6. Reset next_join_at tiap akun agar auto join bisa mulai lagi hari baru
+        conn.execute("UPDATE akun SET next_join_at = NULL")
         conn.commit()
         total = r1.rowcount + r2.rowcount
         print(f"[DailyReset] ✅ Reset otomatis: {r1.rowcount} target queued expired, "
