@@ -1851,6 +1851,49 @@ def _hitung_jeda_broadcast(phone: str) -> float:
 
     return max(float(jeda_min), min(120.0, jeda_acak))
 
+def _cek_spambot_akun(phone: str) -> str:
+    """
+    Cek status akun via SpamBot Telegram secara sinkron.
+    Return: 'diblokir' | 'aman' | 'error'
+    """
+    from services.account_manager import _clients, run_sync
+    import asyncio as _asyncio
+
+    client = _clients.get(phone)
+    if not client:
+        return 'error'
+
+    _BLOCKED_SIGNALS = (
+        'blocked', 'limited', 'violations',
+        'terms of service', 'moderators',
+        'your account has been', 'remain blocked',
+    )
+
+    async def _tanya_spambot(c):
+        try:
+            await c.send_message('SpamBot', '/start')
+            await _asyncio.sleep(3)
+            msgs = await c.get_messages('SpamBot', limit=2)
+            for msg in (msgs or []):
+                if msg and msg.message:
+                    return msg.message.lower()
+        except Exception as e:
+            err = str(e).lower()
+            if any(x in err for x in ('peerflood', 'peer_flood', 'flood')):
+                return 'blocked'
+            return 'error'
+        return 'error'
+
+    try:
+        reply = run_sync(_tanya_spambot(client), timeout=25)
+        reply = str(reply or '').lower()
+        if any(x in reply for x in _BLOCKED_SIGNALS):
+            return 'diblokir'
+        return 'aman'
+    except Exception:
+        return 'error'
+
+
 def _broadcast_boleh_kirim_sekarang(phone: str) -> tuple[bool, str]:
     """
     Cek apakah akun tertentu boleh kirim sekarang berdasarkan:
@@ -2313,21 +2356,68 @@ def stage_delivery(limit: int | None = None) -> dict[str, Any]:
                             print(f'[Broadcast] ⚠️ Percobaan ke-2 gagal — cari akun lain untuk {_row_val(row, "group_name")}')
                             continue
 
-                        # Percobaan ke-2 tanpa akun lain → BLACKLIST permanen
+                        # Percobaan ke-2 tanpa akun lain → cek SpamBot dulu
                         if _new_attempt >= 2 and not akun_lain_tersedia:
-                            update_queue_target(target_id, status='blocked', sender_account_id=resolved_sender,
-                                              delivery_result=payload, failure_reason=message,
-                                              hold_reason='broadcast_blacklisted', finalized_at=_now(),
-                                              last_outcome_code='blacklisted_max_attempt')
-                            _set_group_state(int(_row_val(row, 'group_id')),
-                                           broadcast_status='blocked',
-                                           broadcast_hold_reason='broadcast_blacklisted_max_attempt',
-                                           broadcast_attempt_count=0)
-                            blocked += 1
-                            _log('warning', 'delivery', 'broadcast_blacklisted',
-                                 f'Grup {_row_val(row, "group_name")} diblacklist setelah {_new_attempt}x gagal broadcast',
-                                 entity_type='campaign_target', entity_id=str(target_id), result='blacklisted')
-                            print(f'[Broadcast] ⛔ BLACKLIST permanen: {_row_val(row, "group_name")} ({_new_attempt}x gagal)')
+                            print(f'[Broadcast] Percobaan ke-2 gagal — cek SpamBot {resolved_sender}...')
+                            status_spam = _cek_spambot_akun(resolved_sender)
+
+                            if status_spam == 'diblokir':
+                                from utils.storage_db import tandai_akun_restricted
+                                from services.account_manager import _clients
+                                if tandai_akun_restricted(resolved_sender,
+                                    'Terdeteksi diblokir moderator setelah 2x gagal kirim — SpamBot'):
+                                    print(f'[Broadcast] ⛔ {resolved_sender} DIBLOKIR MODERATOR — dikeluarkan dari otomasi')
+                                _clients.pop(resolved_sender, None)
+
+                                try:
+                                    hasil_cleanup = _cleanup_banned_accounts(max_reassign=50)
+                                    print(f'[Broadcast] Cleanup: sender_reset={hasil_cleanup.get("sender_reset",0)}, '
+                                          f'managed_reset={hasil_cleanup.get("managed_reset",0)}, '
+                                          f'owner_reassigned={hasil_cleanup.get("owner_reassigned",0)}')
+                                except Exception as _ce:
+                                    print(f'[Broadcast] Cleanup gagal: {_ce}')
+
+                                update_queue_target(
+                                    target_id, status='queued',
+                                    sender_account_id=None,
+                                    delivery_result=payload,
+                                    failure_reason='sender_diblokir_spambot',
+                                    hold_reason='sender_diblokir_spambot',
+                                    next_attempt_at=_now_plus(minutes=10),
+                                    finalized_at=None,
+                                    last_outcome_code='sender_diblokir_spambot'
+                                )
+                                _set_group_state(
+                                    int(_row_val(row, 'group_id')),
+                                    broadcast_status='queued',
+                                    broadcast_hold_reason='sender_diblokir_spambot',
+                                    broadcast_attempt_count=0,
+                                )
+                                skipped += 1
+                                _log('warning', 'delivery', 'sender_diblokir_spambot',
+                                     f'{resolved_sender} dikeluarkan dari otomasi setelah SpamBot konfirmasi diblokir',
+                                     entity_type='campaign_target', entity_id=str(target_id), result='sender_removed')
+                            else:
+                                update_queue_target(
+                                    target_id, status='blocked',
+                                    sender_account_id=resolved_sender,
+                                    delivery_result=payload,
+                                    failure_reason=message,
+                                    hold_reason='broadcast_blacklisted',
+                                    finalized_at=_now(),
+                                    last_outcome_code='blacklisted_max_attempt'
+                                )
+                                _set_group_state(
+                                    int(_row_val(row, 'group_id')),
+                                    broadcast_status='blocked',
+                                    broadcast_hold_reason='broadcast_blacklisted_max_attempt',
+                                    broadcast_attempt_count=0,
+                                )
+                                blocked += 1
+                                _log('warning', 'delivery', 'broadcast_blacklisted',
+                                     f'Grup {_row_val(row, "group_name")} diblacklist — akun {resolved_sender} aman (SpamBot)',
+                                     entity_type='campaign_target', entity_id=str(target_id), result='blacklisted')
+                                print(f'[Broadcast] ⛔ BLACKLIST grup: {_row_val(row, "group_name")} (akun aman, grup bermasalah)')
                             continue
                     # === AKHIR SISTEM 2x PERCOBAAN ===
 
