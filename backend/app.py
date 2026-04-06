@@ -767,13 +767,49 @@ def _start_akun_health_check_worker():
             'account banned', 'your account has been',
         )
         _BLOCKED_SIGNALS = (
+            # Bahasa Inggris — banned/restricted permanen
             'blocked', 'limited', 'violations',
             'terms of service', 'moderators',
             'your account has been', 'remain blocked',
+            'has been limited', 'report spam',
+            'too many', 'suspicious activity',
+            'our spam', 'anti-spam',
+            # Bahasa Indonesia — banned/restricted
+            'dibatasi', 'moderator kami', 'mengganggu',
+            'dilaporkan', 'inspeksi', 'pembatasan',
+            'melaporkan anda', 'melaporkan kembali',
+        )
+        _TEMP_BAN_SIGNALS = (
+            # Bahasa Inggris
+            'will be automatically released',
+            'automatically lifted',
+            'restriction will be lifted',
+            'your account will be',
+            'until ',
+            # Bahasa Indonesia
+            'secara otomatis dibebaskan',
+            'dibebaskan pada',
+            'dibatasi sampai',
+            'akan dibebaskan',
+            'pembatasan akan',
+        )
+        _SOFT_LIMIT_SIGNALS = (
+            # Bahasa Inggris
+            'unfortunately',
+            'harsh response',
+            'some phone numbers may',
+            'may trigger',
+            # Bahasa Indonesia
+            'beberapa nomor',
+            'nomor telepon anda',
+            'respons yang keras',
         )
         _CLEAN_SIGNALS = (
             'no limits', 'good news', 'no limitations',
             'not limited', 'your account is not',
+            # Bahasa Indonesia
+            'tidak ada batasan', 'kabar baik',
+            'bebas seperti', 'tidak dibatasi',
         )
 
         async def _cek_satu_akun(phone, client, semaphore):
@@ -786,6 +822,31 @@ def _start_akun_health_check_worker():
                     if getattr(me, 'deleted', False):
                         return {'phone': phone, 'status': 'banned', 'alasan': 'akun dihapus Telegram'}
                     if getattr(me, 'restricted', False):
+                        sb_reply = ''
+                        try:
+                            await client.send_message('SpamBot', '/start')
+                            await _asyncio.sleep(3)
+                            msgs = await client.get_messages('SpamBot', limit=3)
+                            for msg in (msgs or []):
+                                if msg and msg.message:
+                                    sb_reply = (sb_reply + ' ' + msg.message).strip()
+                            sb_reply = sb_reply.lower()
+                        except Exception:
+                            pass
+
+                        if sb_reply:
+                            if any(x in sb_reply for x in _SOFT_LIMIT_SIGNALS):
+                                return {'phone': phone, 'status': 'soft_limit',
+                                        'alasan': sb_reply[:200]}
+                            if any(x in sb_reply for x in _TEMP_BAN_SIGNALS):
+                                return {'phone': phone, 'status': 'restricted',
+                                        'alasan': 'Banned sementara: ' + sb_reply[:200]}
+                            if any(x in sb_reply for x in _BLOCKED_SIGNALS):
+                                return {'phone': phone, 'status': 'restricted',
+                                        'alasan': sb_reply[:200]}
+                            if any(x in sb_reply for x in _CLEAN_SIGNALS):
+                                return {'phone': phone, 'status': 'ok'}
+
                         alasan_list = getattr(me, 'restriction_reason', []) or []
                         alasan_teks = ', '.join(
                             str(getattr(r, 'reason', '') or getattr(r, 'text', '') or str(r))
@@ -799,30 +860,10 @@ def _start_akun_health_check_worker():
                     # Koneksi error biasa — jangan salah tandai
                     return {'phone': phone, 'status': 'ok'}
 
-                # CEK 2: SpamBot — deteksi akun yang diblokir moderator Telegram
-                try:
-                    await client.send_message('SpamBot', '/start')
-                    await _asyncio.sleep(3)
-                    msgs = await client.get_messages('SpamBot', limit=2)
-                    sb_reply = ''
-                    for msg in (msgs or []):
-                        if msg and msg.message:
-                            sb_reply = msg.message.lower()
-                            break
-                    if any(x in sb_reply for x in _CLEAN_SIGNALS):
-                        return {'phone': phone, 'status': 'ok'}
-                    if any(x in sb_reply for x in _BLOCKED_SIGNALS):
-                        return {'phone': phone, 'status': 'spam',
-                                'alasan': 'Diblokir moderator Telegram (laporan pengguna) — SpamBot: ' + sb_reply[:120]}
-                    # Balasan tidak dikenali — anggap normal
-                    return {'phone': phone, 'status': 'ok'}
-                except Exception as e:
-                    err = str(e).lower()
-                    if any(x in err for x in ('peerflood', 'peer_flood', 'flood')):
-                        return {'phone': phone, 'status': 'spam',
-                                'alasan': 'PeerFloodError saat hubungi SpamBot'}
-                    # Gagal hubungi SpamBot karena network/timeout — jangan salah tandai
-                    return {'phone': phone, 'status': 'ok'}
+                # CEK 3: Akun tidak restricted — tidak perlu tanya SpamBot rutin
+                # SpamBot hanya dipanggil saat me.restricted = True (di atas)
+                # atau saat 2x gagal kirim di stage_delivery
+                return {'phone': phone, 'status': 'ok'}
 
         async def _cek_semua_paralel(clients_snapshot):
             semaphore = _asyncio.Semaphore(20)
@@ -868,7 +909,15 @@ def _start_akun_health_check_worker():
                     if tandai_akun_restricted(phone, alasan_spam):
                         print("[HealthCheck] SPAM/BLOKIR: " + phone + " — " + alasan[:120])
                         jumlah_spam += 1
+                elif status == 'soft_limit':
+                    from utils.storage_db import tandai_akun_soft_limit
+                    if tandai_akun_soft_limit(phone, alasan):
+                        print("[HealthCheck] SOFT LIMIT: " + phone + " — " + alasan)
+                    jumlah_cek += 1
                 else:
+                    from utils.storage_db import hapus_akun_soft_limit
+                    if hapus_akun_soft_limit(phone):
+                        print("[HealthCheck] " + phone + " — soft limit selesai, kembali normal")
                     jumlah_cek += 1
 
             ringkasan = str(jumlah_cek) + " akun OK"

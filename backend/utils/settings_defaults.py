@@ -43,6 +43,11 @@ DEFAULT_SETTINGS += _rows(
     ('w4_maks_kirim', '50', 'Level 4: Maks kirim/hari', 'number'),
     ('w4_jeda_join', '3', 'Level 4: Jeda join (detik)', 'number'),
     ('w4_jeda_kirim', '3', 'Level 4: Jeda kirim (detik)', 'number'),
+    # Kuota khusus akun waspada (soft limit dari Telegram)
+    ('waspada_maks_kirim',  '5',   'Akun Waspada: Maks kirim/hari', 'number'),
+    ('waspada_maks_join',   '2',   'Akun Waspada: Maks join/hari',  'number'),
+    ('waspada_jeda_kirim',  '90',  'Akun Waspada: Jeda kirim (detik)', 'number'),
+    ('waspada_jeda_join',   '300', 'Akun Waspada: Jeda join (detik)',  'number'),
 )
 
 # ── Popup Penilaian Akun ────────────────────────────────────────────────────

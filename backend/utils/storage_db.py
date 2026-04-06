@@ -82,6 +82,39 @@ def tandai_akun_restricted(phone: str, alasan: str = '') -> bool:
     return updated
 
 
+def tandai_akun_soft_limit(phone: str, alasan: str = '') -> bool:
+    """Tandai akun soft limit Telegram. Status tetap 'active'."""
+    conn = get_conn()
+    cur = conn.execute(
+        """UPDATE akun
+           SET last_error_code='soft_limit',
+               last_error_message=%s
+           WHERE phone=%s
+             AND status NOT IN ('banned','restricted')""",
+        (alasan[:200] if alasan else 'Soft limit Telegram — akun dicurigai', phone)
+    )
+    updated = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def hapus_akun_soft_limit(phone: str) -> bool:
+    """Hapus status soft_limit."""
+    conn = get_conn()
+    cur = conn.execute(
+        """UPDATE akun
+           SET last_error_code=NULL,
+               last_error_message=NULL
+           WHERE phone=%s
+             AND last_error_code='soft_limit'""",
+        (phone,)
+    )
+    updated = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
 
 def get_next_join_at(phone):
     conn = get_conn()

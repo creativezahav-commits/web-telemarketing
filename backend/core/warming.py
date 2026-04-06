@@ -79,14 +79,34 @@ def get_info_warming(phone: str) -> dict:
 
 
 def get_daily_capacity(phone: str) -> dict:
-    """Single source of truth for daily join/send usage and limits."""
+    """Single source of truth for daily join/send usage and limits.
+    Akun soft_limit memakai kuota waspada yang lebih konservatif.
+    """
     from utils.storage_db import hitung_kirim_hari_ini, hitung_join_hari_ini
-    maks_kirim = max(0, int(get_batas_kirim(phone) or 0))
-    maks_join = max(0, int(get_batas_join(phone) or 0))
+    from utils.settings_manager import get_int as _gi
+    from utils.database import get_conn as _gc
+
+    try:
+        conn = _gc()
+        row = conn.execute(
+            "SELECT last_error_code FROM akun WHERE phone=%s", (phone,)
+        ).fetchone()
+        conn.close()
+        is_soft_limit = bool(row and str(row['last_error_code'] or '') == 'soft_limit')
+    except Exception:
+        is_soft_limit = False
+
+    if is_soft_limit:
+        maks_kirim = max(0, int(_gi('waspada_maks_kirim', 5) or 5))
+        maks_join  = max(0, int(_gi('waspada_maks_join',  2) or 2))
+    else:
+        maks_kirim = max(0, int(get_batas_kirim(phone) or 0))
+        maks_join  = max(0, int(get_batas_join(phone) or 0))
     sudah_kirim = max(0, int(hitung_kirim_hari_ini(phone) or 0))
     sudah_join = max(0, int(hitung_join_hari_ini(phone) or 0))
     return {
         "phone": phone,
+        "is_soft_limit": is_soft_limit,
         "kirim": {
             "used": sudah_kirim,
             "limit": maks_kirim,

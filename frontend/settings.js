@@ -239,6 +239,11 @@ function tampilSettings(data) {
             desc: "Akun tertua dan paling aman — boleh paling aktif.",
             keys: ["w4_maks_kirim","w4_maks_join","w4_jeda_kirim","w4_jeda_join","w4_hari_min","w4_hari_max"]
         },
+        {
+            judul: "🟡 Batas Akun Waspada (Soft Limit)",
+            desc: "Akun yang terdeteksi soft limit Telegram tetap aktif tapi dengan kuota lebih konservatif agar tidak diblokir lebih lanjut.",
+            keys: ["waspada_maks_kirim", "waspada_maks_join", "waspada_jeda_kirim", "waspada_jeda_join"]
+        },
 
 
 

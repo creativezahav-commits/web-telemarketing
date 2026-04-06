@@ -170,6 +170,7 @@ function _accountStatusClass(a) {
     const status = (a.status || '').toLowerCase();
     if (status === 'banned' || status === 'suspended') return 'offline';
     if (status === 'restricted') return 'offline';  // Diblokir moderator — tampilkan merah
+    if (a.last_error_code === 'soft_limit') return 'warn';  // Kuning waspada
     if (!a.online) return status === 'active' ? 'standby' : 'offline';
     // Online — cek kondisi lebih detail
     const sisaKirim = Math.max(0, (a.maks_kirim || 0) - (a.sudah_kirim || 0));
@@ -183,6 +184,7 @@ function _accountStatusText(a) {
     if (status === 'banned') return 'Banned';
     if (status === 'suspended') return 'Suspended';
     if (status === 'restricted') return 'Diblokir Telegram';  // Label jelas di kartu
+    if (a.last_error_code === 'soft_limit') return 'Waspada';
     if (!a.online) return status === 'active' ? 'Standby' : (a.status || 'Offline');
     const sisaKirim = Math.max(0, (a.maks_kirim || 0) - (a.sudah_kirim || 0));
     if (sisaKirim <= 0 && (a.maks_kirim || 0) > 0) return 'Limit';
@@ -206,7 +208,7 @@ function _renderAkunCard(a) {
                 <div>
                     <div class="account-card-name-row">
                         <span class="account-card-name">${a.nama || 'Tanpa Nama'}</span>
-                        <span class="badge badge-${(a.status === 'restricted' || a.status === 'banned') ? 'offline' : (a.online ? 'aktif' : 'offline')}">${a.status === 'restricted' ? 'Diblokir' : a.status === 'banned' ? 'Banned' : (a.online ? 'Online' : 'Offline')}</span>
+                        <span class="badge badge-${(a.status === 'restricted' || a.status === 'banned') ? 'offline' : a.last_error_code === 'soft_limit' ? 'warn' : (a.online ? 'aktif' : 'offline')}">${a.status === 'restricted' ? 'Diblokir' : a.status === 'banned' ? 'Banned' : a.last_error_code === 'soft_limit' ? '⚠️ Waspada' : (a.online ? 'Online' : 'Offline')}</span>
                     </div>
                     <div class="account-card-sub">@${a.username || '-'} · ${a.phone}</div>
                 </div>
@@ -386,6 +388,7 @@ async function muatAkun() {
         const _skorAkun = (a) => {
             const st = (a.status || '').toLowerCase();
             if (st === 'banned' || st === 'suspended') return 0;
+            if (a.last_error_code === 'soft_limit') return 0.5;
             if (st === 'restricted') return 1;
             if (!a.online) return 2;
             return 3; // online & aktif = paling atas
